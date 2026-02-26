@@ -24,9 +24,21 @@
 #include "mos_version.h"
 #include "mos_types.h"
 #include "esp_log.h"
+#include "esp_heap_caps.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_timer.h"
+
+/* Allocate from PSRAM for user programs (BBC BASIC needs large heaps) */
+static void *mos_malloc_spiram(size_t size)
+{
+    return heap_caps_malloc(size, MALLOC_CAP_SPIRAM);
+}
+
+static void mos_free_spiram(void *ptr)
+{
+    heap_caps_free(ptr);
+}
 
 static const char *TAG = "mos_api";
 
@@ -415,8 +427,8 @@ void mos_api_table_init(void)
     t->getrtc     = mos_api_getrtc;
     t->setrtc     = mos_api_setrtc;
 
-    t->malloc     = malloc;
-    t->free       = free;
+    t->malloc     = mos_malloc_spiram;
+    t->free       = mos_free_spiram;
 
     t->mos_version = mos_api_version;
     t->mos_variant = mos_api_variant;
