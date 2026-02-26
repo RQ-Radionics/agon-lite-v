@@ -14,6 +14,11 @@ AS      = xtensa-esp-elf-gcc
 OBJCOPY = xtensa-esp-elf-objcopy
 OBJDUMP = xtensa-esp-elf-objdump
 
+# xtensa-esp-elf-gcc defaults to big-endian without a dynconfig.
+# The ESP32-S3 config .so selects little-endian + correct ISA extensions.
+XTENSA_DYNCONFIG_SO := xtensa_esp32s3.so
+XTENSA_LIB_DIR      := $(dir $(shell which xtensa-esp-elf-gcc))../lib
+
 # ── Directorios ──────────────────────────────────────────────────────────────
 SDK_DIR  := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 INC_DIR  := $(SDK_DIR)../components/mos_api/include
@@ -25,7 +30,11 @@ INC_DIR  := $(SDK_DIR)../components/mos_api/include
 MOS_EXEC_BASE ?= 0x420E0000
 
 # ── Flags de compilación ─────────────────────────────────────────────────────
+# -mdynconfig selects little-endian + ESP32-S3 ISA (set via DYLD_LIBRARY_PATH)
+DYNCONFIG_FLAG = -mdynconfig=$(XTENSA_DYNCONFIG_SO)
+
 CFLAGS = \
+    $(DYNCONFIG_FLAG) \
     -mlongcalls \
     -mtext-section-literals \
     -Os \
@@ -38,6 +47,7 @@ CFLAGS = \
     -I$(INC_DIR)
 
 ASFLAGS = \
+    $(DYNCONFIG_FLAG) \
     -mlongcalls \
     -nostdlib
 
@@ -54,6 +64,9 @@ COMMON_OBJS := $(SDK_DIR)mos_vector.o
 # ── Reglas ───────────────────────────────────────────────────────────────────
 SRCS    := $(wildcard $(SDK_DIR)*.c)
 BINS    := $(patsubst $(SDK_DIR)%.c,$(SDK_DIR)%.bin,$(SRCS))
+
+# Export DYLD_LIBRARY_PATH so the compiler can dlopen xtensa_esp32s3.so
+export DYLD_LIBRARY_PATH := $(XTENSA_LIB_DIR)$(if $(DYLD_LIBRARY_PATH),:$(DYLD_LIBRARY_PATH))
 
 .PHONY: all clean disasm
 
