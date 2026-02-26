@@ -28,6 +28,11 @@ CONFIG_ESP_CONSOLE_UART_BAUDRATE=115200
 # FreeRTOS tick rate
 CONFIG_FREERTOS_HZ=1000
 
+# PSRAM (for user program loading)
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y
+
 # Main task stack size (shell needs decent stack)
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
 
