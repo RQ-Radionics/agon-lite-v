@@ -42,10 +42,25 @@ static const char *history_get(int offset)
     return s_history[idx];
 }
 
-/* --- VT100 helpers --- */
-static void cursor_left(int n)  { if (n > 0) mos_printf("\033[%dD", n); }
-static void cursor_right(int n) { if (n > 0) mos_printf("\033[%dC", n); }
-static void erase_to_eol(void)  { mos_puts("\033[K"); }
+/* --- Cursor movement helpers using VDU codes (Agon VDP BBC protocol) ---
+ * VDU 8  = cursor left
+ * VDU 9  = cursor right
+ * VDU 11 = cursor up
+ * VDU 27,'[','K' = ANSI erase-to-EOL (VDP supports this ANSI subset)
+ */
+static void cursor_left(int n)
+{
+    while (n-- > 0) mos_putch(8);   /* VDU 8: cursor left */
+}
+static void cursor_right(int n)
+{
+    while (n-- > 0) mos_putch(9);   /* VDU 9: cursor right */
+}
+static void erase_to_eol(void)
+{
+    /* VDU 23,1,... not needed — use ANSI erase which Agon VDP does support */
+    mos_puts("\033[K");
+}
 
 /* --- Public API --- */
 
@@ -102,10 +117,19 @@ int mos_editor_readline(const char *prompt, char *buf, size_t buf_size)
         }
 
         if (c == 0x1B) {
-            /* Escape sequence */
+            /* Escape sequence — parse ESC [ <num> <letter>
+             * The VDP may send either ESC [ D or ESC [ 1 D for cursor left,
+             * etc.  Read optional decimal parameter before the final byte. */
             int c2 = mos_getch();
             if (c2 == '[') {
+                /* Read optional numeric parameter */
+                int param = 0;
                 int c3 = mos_getch();
+                while (c3 >= '0' && c3 <= '9') {
+                    param = param * 10 + (c3 - '0');
+                    c3 = mos_getch();
+                }
+                /* c3 is now the final letter (or '~') */
                 switch (c3) {
                     case 'A': /* Up arrow — history back */
                         if (hist_offset == 0) {
@@ -145,24 +169,28 @@ int mos_editor_readline(const char *prompt, char *buf, size_t buf_size)
                             cursor++;
                         }
                         break;
-                    case 'D': /* Left arrow */
+                    case 'D': /* Left arrow — also sent by VDP for Backspace */
                         if (cursor > 0) {
                             cursor_left(1);
                             cursor--;
                         }
                         break;
-                    case '3': { /* DEL key: ESC [ 3 ~ */
-                        int c4 = mos_getch();
-                        if (c4 == '~' && cursor < len) {
+                    case '~': /* ESC [ n ~ sequences */
+                        if (param == 3 && cursor < len) { /* Delete key */
                             memmove(&line[cursor], &line[cursor + 1], len - cursor - 1);
                             len--;
                             line[len] = '\0';
                             mos_puts(&line[cursor]);
                             mos_putch(' ');
                             cursor_left(len - cursor + 1);
+                        } else if (param == 1 || param == 7) { /* Home */
+                            cursor_left(cursor);
+                            cursor = 0;
+                        } else if (param == 4 || param == 8) { /* End */
+                            cursor_right(len - cursor);
+                            cursor = len;
                         }
                         break;
-                    }
                     case 'H': /* Home */
                         cursor_left(cursor);
                         cursor = 0;

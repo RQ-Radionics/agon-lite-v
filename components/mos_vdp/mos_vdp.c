@@ -128,12 +128,24 @@ static bool proto_feed(vdp_proto_t *p, uint8_t byte, uint8_t *out_ascii)
             bool got_key = false;
             if (p->cmd == VDP_CMD_KEY && p->len >= 4) {
                 uint8_t ascii   = p->data[0];
+                uint8_t mods    = p->data[1];
+                uint8_t vk      = p->data[2];
                 uint8_t keydown = p->data[3];
-                if (keydown && ascii) {
-                    *out_ascii = ascii;
-                    got_key = true;
-                    ESP_LOGD(TAG, "KEY ascii=0x%02x mods=0x%02x vk=0x%02x down=%d",
-                             p->data[0], p->data[1], p->data[2], p->data[3]);
+                ESP_LOGD(TAG, "KEY ascii=0x%02x mods=0x%02x vk=0x%02x down=%d",
+                         ascii, mods, vk, keydown);
+                if (keydown) {
+                    /* Some keys arrive with ascii=0 — map via vkeycode */
+                    if (ascii == 0) {
+                        switch (vk) {
+                            case 0x08: ascii = 0x08; break; /* Backspace */
+                            case 0x7F: ascii = 0x7F; break; /* Delete    */
+                            default:   break;
+                        }
+                    }
+                    if (ascii) {
+                        *out_ascii = ascii;
+                        got_key = true;
+                    }
                 }
             }
             proto_reset(p);
