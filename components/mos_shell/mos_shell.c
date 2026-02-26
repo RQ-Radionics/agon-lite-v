@@ -339,9 +339,49 @@ int mos_exec(char *buffer)
         return result;
     }
 
-    /* Not a built-in command */
-    mos_printf("Unknown command: %.*s (type HELP for list)\r\n", cmdLen, commandPtr);
-    return MOS_INVALID_COMMAND;
+    /* Not a built-in — try to find <command>.bin in cwd, then /flash */
+    {
+        char binname[64];   /* command names are short */
+        char resolved[MOS_PATH_MAX];
+        snprintf(binname, sizeof(binname) - 4, "%.*s", cmdLen, commandPtr);
+        /* Append .bin safely */
+        size_t blen = strlen(binname);
+        memcpy(binname + blen, ".bin", 5);
+
+        /* Search order: current directory, then /flash root */
+        const char *search[] = { mos_fs_getcwd(), MOS_FLASH_MOUNT, NULL };
+        bool found = false;
+        for (int si = 0; search[si] && !found; si++) {
+            snprintf(resolved, sizeof(resolved), "%s/%s", search[si], binname);
+            FILE *probe = fopen(resolved, "rb");
+            if (probe) { fclose(probe); found = true; }
+        }
+
+        if (found) {
+            /* Build argv and delegate to loader */
+            char *argv_buf[17];
+            int   argc = 0;
+            argv_buf[argc++] = binname;
+            /* Tokenise remaining args (argsPtr already trimmed) */
+            char *ap = argsPtr;
+            char *arg;
+            while (argc < 16) {
+                if (extractString(ap, &ap, NULL, &arg,
+                                  EXTRACT_FLAG_AUTO_TERMINATE) != FR_OK) break;
+                argv_buf[argc++] = arg;
+            }
+            argv_buf[argc] = NULL;
+            int ret = mos_loader_exec(resolved, argc, argv_buf);
+            if (ret < 0) {
+                mos_printf("Failed to run '%s'\r\n", binname);
+                return FR_INT_ERR;
+            }
+            return FR_OK;
+        }
+
+        mos_printf("Unknown command: %.*s (type HELP for list)\r\n", cmdLen, commandPtr);
+        return MOS_INVALID_COMMAND;
+    }
 }
 
 /* -------------------------------------------------------------------------
