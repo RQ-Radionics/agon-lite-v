@@ -513,8 +513,7 @@ static int cmd_CD(char *ptr)
 static int cmd_CLS(char *ptr)
 {
     (void)ptr;
-    /* VT100 clear screen + home */
-    mos_puts("\033[2J\033[H");
+    mos_putch(12);   /* VDU 12 — clear screen (BBC Micro / Agon VDP) */
     return FR_OK;
 }
 

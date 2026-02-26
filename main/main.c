@@ -31,22 +31,36 @@
 static const char *TAG = "esp32-mos";
 
 /*
- * VDU colour codes (BBC Micro / Agon VDP compatible)
- * VDU 17, n  — set text foreground colour (n = 0..15)
- * VDU 17, n+128 — set text background colour
- * Standard colours: 0=black 1=red 2=green 3=yellow 4=blue 5=magenta 6=cyan 7=white
- * Bright:          8=dark  9=bred 10=bgrn 11=bylo 12=bblu 13=bmag 14=bcyn 15=bwht
+ * VDU colour helpers — verified against agon-vdp/video/vdu.h
+ *
+ * VDU 17 (0x11) + n:
+ *   n  0..63  = set text foreground (0=black 1=red 2=green 3=yellow
+ *               4=blue 5=magenta 6=cyan 7=white 8..15=bright versions)
+ *   n 128..191 = set text background (128=black, 129=red, ... 135=white)
+ *
+ * VDU 12 (0x0C) = CLS (clear screen)
+ * VDU 30 (0x1E) = cursor home (top-left)
  */
-#define VDU_COL(n)   "\x11" n          /* VDU 17, n — set foreground colour  */
-#define COL_BLACK    VDU_COL("\x00")
-#define COL_RED      VDU_COL("\x01")
-#define COL_GREEN    VDU_COL("\x02")
-#define COL_YELLOW   VDU_COL("\x03")
-#define COL_CYAN     VDU_COL("\x06")
-#define COL_WHITE    VDU_COL("\x07")
-#define COL_BYELLOW  VDU_COL("\x0b")   /* bright yellow */
-#define COL_BCYAN    VDU_COL("\x0e")   /* bright cyan   */
-#define COL_BWHITE   VDU_COL("\x0f")   /* bright white  */
+#define VDU_FG(n)    "\x11" "\x0" #n   /* won't work for hex — use raw strings */
+
+/* Foreground colours (n < 64) */
+#define COL_RED      "\x11\x01"
+#define COL_GREEN    "\x11\x02"
+#define COL_YELLOW   "\x11\x03"
+#define COL_CYAN     "\x11\x06"
+#define COL_WHITE    "\x11\x07"
+#define COL_BBLACK   "\x11\x08"
+#define COL_BYELLOW  "\x11\x0b"
+#define COL_BCYAN    "\x11\x0e"
+#define COL_BWHITE   "\x11\x0f"
+
+/* Background colours (n >= 128) */
+#define BG_BLACK     "\x11\x80"
+#define BG_BLUE      "\x11\x84"
+#define BG_CYAN      "\x11\x86"
+
+#define VDU_CLS      "\x0c"            /* VDU 12 — clear screen             */
+#define VDU_HOME     "\x1e"            /* VDU 30 — cursor home              */
 
 static void print_banner(void)
 {
@@ -57,13 +71,15 @@ static void print_banner(void)
     const char *wifi_s  = mos_wifi_is_connected()? COL_GREEN  "OK"   COL_BWHITE
                                                   : COL_RED    "FAIL" COL_BWHITE;
 
-    mos_printf("\r\n");
+    /* Reset to white-on-black, clear screen */
+    mos_puts(BG_BLACK COL_BWHITE VDU_CLS VDU_HOME);
+
     mos_printf(COL_BCYAN  "  ********************************\r\n");
     mos_printf(           "  *  " COL_BYELLOW "ESP32-MOS v" VERSION_STRING
-               COL_BCYAN "                *\r\n");
-    mos_printf(           "  *  " COL_BWHITE  VERSION_VARIANT
+               "                " COL_BCYAN "*\r\n");
+    mos_printf(           "  *  " COL_BWHITE VERSION_VARIANT
                "  \"" VERSION_SUBTITLE "\""
-               COL_BCYAN "        *\r\n");
+               "        " COL_BCYAN "*\r\n");
     mos_printf(           "  ********************************\r\n");
     mos_printf(COL_BWHITE "\r\n");
     mos_printf("  Flash: %s   SD: %s   WiFi: %s\r\n", flash_s, sd_s, wifi_s);
@@ -142,10 +158,12 @@ void app_main(void)
             while (!mos_vdp_connected()) {
                 vTaskDelay(pdMS_TO_TICKS(100));
             }
+            /* Give the VDP a moment to finish handshake before sending VDU codes */
+            vTaskDelay(pdMS_TO_TICKS(200));
             ESP_LOGI(TAG, "VDP client connected - starting shell session");
         }
 
-        /* Welcome banner */
+        /* Welcome banner (includes CLS + colour reset) */
         print_banner();
 
         /* Run autoexec if present */
