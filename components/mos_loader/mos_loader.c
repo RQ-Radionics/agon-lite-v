@@ -76,8 +76,8 @@ int mos_loader_exec(const char *path, int argc, char **argv)
         return -1;
     }
 
-    ESP_LOGI(TAG, "Exec arena @ %p (MOS_EXEC_BASE must match)", s_exec_arena);
-    ESP_LOGI(TAG, "Loading '%s' (%u bytes) into PSRAM", resolved, (unsigned)size);
+    ESP_LOGD(TAG, "Exec arena @ %p", s_exec_arena);
+    ESP_LOGI(TAG, "Loading '%s' (%u bytes)", resolved, (unsigned)size);
 
     /* 3. Read binary into fixed arena */
     FILE *f = fopen(resolved, "rb");
@@ -92,10 +92,8 @@ int mos_loader_exec(const char *path, int argc, char **argv)
         return -1;
     }
 
-    /* 3b. Validate magic: first 3 bytes must be Xtensa 'j _start' opcode.
-     *     eZ80/Z80/x86 binaries start differently; reject them early to
-     *     avoid a crash instead of a Guru Meditation. */
-    /* Xtensa DENSITY 'j 0x1c' encodes as: 06 08 00  (j +28 = entry point) */
+    /* 3b. Validate magic: byte[0] must be 0x06 (Xtensa density 'j' opcode).
+     *     eZ80/Agon binaries start differently — reject early. */
     if (s_exec_arena[0] != 0x06) {
         ESP_LOGE(TAG, "'%s': not a valid ESP32-MOS binary (got %02x %02x %02x, "
                  "expected Xtensa 'j' opcode 0x06). "
@@ -149,21 +147,11 @@ int mos_loader_exec(const char *path, int argc, char **argv)
      * The CPU can only fetch code from the IBUS range. */
     void *ibus_entry = dbus_to_ibus(s_exec_arena);
     mos_entry_t entry = (mos_entry_t)ibus_entry;
-    ESP_LOGI(TAG, "dbus @ %p  ibus @ %p", s_exec_arena, ibus_entry);
-    ESP_LOGI(TAG, "Jumping to entry @ %p", entry);
-
-    /* Diagnostic: dump first bytes via DBUS and via the literal pool offset.
-     * arena[0x00..0x02] should be the 'j _start' trampoline: 06 08 00
-     * arena[0x8c..0x90] should be "Hell" (0x48 65 6c 6c) */
-    const uint8_t *d = s_exec_arena;
-    ESP_LOGI(TAG, "arena[0x00]: %02x %02x %02x  (byte[0]=0x06 = Xtensa density 'j')",
-             d[0], d[1], d[2]);
-    ESP_LOGI(TAG, "arena[0x8c]: %02x %02x %02x %02x",
-             d[0x8c], d[0x8d], d[0x8e], d[0x8f]);
+    ESP_LOGI(TAG, "Running '%s'", resolved);
 
     int ret = entry(argc, argv, mos_api_table_get());
 
-    ESP_LOGI(TAG, "Program returned %d", ret);
+    ESP_LOGI(TAG, "'%s' exited %d", resolved, ret);
     return ret;
 }
 
