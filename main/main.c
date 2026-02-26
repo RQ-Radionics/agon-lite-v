@@ -1,9 +1,16 @@
 /*
  * main.c - ESP32-MOS entry point
  *
- * Replaces the eZ80 main.c from agon-mos.
- * No VDP sync, no RST vectors, no ASM startup.
- * The ESP-IDF FreeRTOS runtime handles all low-level initialisation.
+ * Boot sequence:
+ *   1. Console (UART0)
+ *   2. Flash FAT mount
+ *   3. SD card mount (optional)
+ *   4. WiFi connect
+ *   5. SNTP time sync (non-fatal if it times out)
+ *   6. VDP TCP server start
+ *   7. Shell init + welcome banner
+ *   8. Autoexec
+ *   9. Interactive shell loop (never returns)
  */
 
 #include <stdio.h>
@@ -15,6 +22,9 @@
 #include "mos_fs.h"
 #include "mos_sysvars.h"
 #include "mos_shell.h"
+#include "mos_wifi.h"
+#include "mos_sntp.h"
+#include "mos_vdp.h"
 
 static const char *TAG = "esp32-mos";
 
@@ -34,18 +44,47 @@ void app_main(void)
         ESP_LOGW(TAG, "SD card not available");
     }
 
-    /* 4. Shell init (variables, history) */
+    /* 4. WiFi — wait up to 15 s for IP */
+    mos_printf("Connecting to WiFi…\n");
+    int wifi_ok = mos_wifi_init(15000);
+    if (wifi_ok == 0) {
+        mos_printf("WiFi OK  IP: %s\n", mos_wifi_ip());
+    } else {
+        mos_printf("WiFi FAIL — network features unavailable\n");
+    }
+
+    /* 5. SNTP — only if WiFi is up; wait up to 10 s */
+    if (wifi_ok == 0) {
+        if (mos_sntp_init(NULL, 10000) == 0) {
+            mos_printf("Clock synced via NTP\n");
+        } else {
+            mos_printf("NTP sync timeout — clock not set\n");
+        }
+    }
+
+    /* 6. VDP TCP server */
+    if (wifi_ok == 0) {
+        if (mos_vdp_init() == 0) {
+            mos_printf("VDP server listening on port %d\n", MOS_VDP_TCP_PORT);
+        } else {
+            mos_printf("VDP server failed to start\n");
+        }
+    }
+
+    /* 7. Shell init (variables, history) */
     mos_shell_init();
 
-    /* 5. Welcome banner */
-    mos_printf("\n\n");
+    /* 8. Welcome banner */
+    mos_printf("\n");
     mos_printf("ESP32-MOS v" VERSION_STRING " " VERSION_VARIANT " \"" VERSION_SUBTITLE "\"\n");
-    mos_printf("Flash: %s  SD: %s\n",
-               mos_fs_flash_mounted() ? "OK" : "FAIL",
-               mos_fs_sd_mounted()    ? "OK" : "N/A");
+    mos_printf("Flash: %s  SD: %s  WiFi: %s  VDP: port %d\n",
+               mos_fs_flash_mounted() ? "OK"   : "FAIL",
+               mos_fs_sd_mounted()    ? "OK"   : "N/A",
+               mos_wifi_is_connected()? "OK"   : "FAIL",
+               MOS_VDP_TCP_PORT);
     mos_printf("Type HELP for commands.\n\n");
 
-    /* 6. Run autoexec if present */
+    /* 9. Run autoexec if present */
     char autoexec[64];
     snprintf(autoexec, sizeof(autoexec), "%s/autoexec.obey", MOS_FLASH_MOUNT);
     FILE *f = fopen(autoexec, "r");
@@ -55,6 +94,6 @@ void app_main(void)
         mos_shell_exec("EXEC " MOS_FLASH_MOUNT "/autoexec.obey");
     }
 
-    /* 7. Interactive shell loop (never returns) */
+    /* 10. Interactive shell loop (never returns) */
     mos_shell_run();
 }

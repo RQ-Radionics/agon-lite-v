@@ -9,4 +9,7 @@ idf_component_register(
         mos_sysvars
         mos_editor
         mos_shell
+        mos_wifi
+        mos_sntp
+        mos_vdp
 )
