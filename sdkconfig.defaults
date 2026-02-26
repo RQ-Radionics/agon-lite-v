@@ -32,6 +32,11 @@ CONFIG_FREERTOS_HZ=1000
 CONFIG_SPIRAM=y
 CONFIG_SPIRAM_MODE_OCT=y
 CONFIG_SPIRAM_SPEED_80M=y
+# Allow EXT_RAM_BSS_ATTR globals in .ext_ram.bss → PSRAM
+CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y
+
+# sys_evt task stack — default 2304 is too small with PSRAM/logging overhead
+CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE=4096
 
 # Main task stack size (shell needs decent stack)
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192

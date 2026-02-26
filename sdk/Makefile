@@ -19,7 +19,7 @@ INC_DIR  := $(SDK_DIR)../components/mos_api/include
 
 # ── Dirección de carga en PSRAM ──────────────────────────────────────────────
 # Debe coincidir con MOS_EXEC_BASE en mos_loader.h
-MOS_EXEC_BASE ?= 0x3C000000
+MOS_EXEC_BASE ?= 0x3C0E0000
 
 # ── Flags de compilación ─────────────────────────────────────────────────────
 CFLAGS = \

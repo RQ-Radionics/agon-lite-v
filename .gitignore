@@ -6,6 +6,7 @@ build/
 
 # SDK intermediate build artifacts
 sdk/*.elf
+sdk/*.bin
 sdk/*.map
 sdk/helloworld
 
