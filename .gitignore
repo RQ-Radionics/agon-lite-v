@@ -1,0 +1,14 @@
+# ESP-IDF build output
+build/
+
+# Editor / LSP caches
+.cache/
+
+# SDK intermediate build artifacts
+sdk/*.elf
+sdk/*.map
+sdk/helloworld
+
+# Python
+__pycache__/
+*.pyc
