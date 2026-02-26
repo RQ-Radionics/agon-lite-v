@@ -101,7 +101,10 @@ def compute_layout(part_start, part_size):
 def make_cfg(part_start, part_size, flash_size):
     page_size = FLASH_ERASE_SIZE
     fields = (
-        part_start,                  # wl_partition_start_addr
+        0,                           # wl_partition_start_addr — always 0 (WL_DEFAULT_START_ADDR)
+                                     # The driver uses esp_partition_read() with offsets relative
+                                     # to the partition start, so this field must be 0, NOT the
+                                     # absolute flash address of the partition.
         part_size,                   # wl_partition_size
         page_size,                   # wl_page_size  ← MUST be flash erase size (4096)
         FLASH_ERASE_SIZE,            # flash_sector_size
