@@ -38,3 +38,66 @@ bd sync               # Sync with git
 - NEVER say "ready to push when you are" - YOU must push
 - If push fails, resolve and retry until it succeeds
 
+## SDK Workflow — CRITICAL
+
+After building a user program, **always copy to `data/` before flashing storage**:
+```bash
+make -C sdk          # auto-copies .bin to data/ via Makefile rule
+./flash_data.sh /dev/cu.usbmodem2401
+```
+The `make` rule now does this automatically. If copying manually: `cp sdk/foo.bin data/foo.bin`.
+
+## Cache Sync — CRITICAL (commit cca199d)
+
+When loading a binary into `s_exec_arena` (PSRAM DBUS, `0x3Cxxxxxx`):
+
+`fread()` goes through the FAT driver (CPU/memcpy path) → data is in **dcache as dirty lines**, NOT yet in physical PSRAM.
+
+**Correct two-step sync:**
+```c
+// Step A: flush dirty dcache → physical PSRAM, then invalidate dcache
+esp_cache_msync(s_exec_arena, sync_size,
+    C2M | INVALIDATE | TYPE_DATA | UNALIGNED);
+
+// Step B: invalidate icache for IBUS window (0x42xxxxxx) — use IBUS alias addr
+// M2C does NOT accept UNALIGNED flag
+esp_cache_msync(dbus_to_ibus(s_exec_arena), sync_size,
+    M2C | INVALIDATE | TYPE_INST);
+```
+
+Wrong approaches tried:
+- Pure `M2C` for data: discards dirty dcache without writeback → binary lost
+- `C2M` only (no icache): code fetch works but dcache refills stale on next run
+- `M2C` with `UNALIGNED`: rejected by ESP-IDF (`ESP_ERR_INVALID_ARG`)
+
+## Linker Script (mos_user.ld) — CRITICAL (commit cca199d)
+
+The `> DBUS` region directive **resets VMA to the region origin** (`MOS_DBUS_BASE = 0x3C0E0000`) regardless of the current location counter. To place rodata at the correct DBUS alias of `_ibus_end`, use **explicit VMA form**:
+
+```ld
+_dbus_data_start = _ibus_end - BUS_OFFSET;   /* DBUS alias of where code ends */
+
+.rodata _dbus_data_start : AT(_ibus_end) {   /* VMA explicit, LMA contiguous */
+    *(.rodata*)
+}
+```
+
+Do NOT use `> DBUS` for data sections — it overrides the explicit VMA.
+
+## Current State (session end 2026-02-26)
+
+### Fully working ✅
+- VDP handshake, color banner, mode 16
+- FAT mount with write (`wl_wrap.py`)
+- PSRAM enabled
+- Shell: external commands without `RUN` or `.bin` extension
+- Loader: fixed arena, two-step cache sync, IBUS jump
+- SDK: `mos_vector.S` trampoline, correct IBUS/DBUS split linker script, little-endian
+- **`helloworld` executes, prints to VDP, writes file — full API chain confirmed**
+
+### Next areas to work on
+- More shell commands (TYPE, DEL, RENAME, COPY, CD, MKDIR)
+- XMODEM receive for uploading binaries over serial
+- More user SDK examples
+- I2C driver (issue esp32-mos-h4x)
+
