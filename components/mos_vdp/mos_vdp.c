@@ -220,9 +220,24 @@ static void vdp_server_task(void *arg)
         xQueueReset(s_rx_queue);
         proto_reset(&proto);
 
-        /* Handshake: signal MOS ready */
-        uint8_t gp = 0x80;
-        send(fd, &gp, 1, MSG_DONTWAIT);
+        /* Handshake: send VDU 23, 0, 0x80, 0 — General Poll request.
+         *
+         * The VDP client (agon-sdl) calls wait_eZ80() which loops reading
+         * bytes until it sees VDU 23 (0x17).  It then calls vdu_sys() →
+         * vdu_sys_video() → sendGeneralPoll(), reads one echo byte, sends
+         * back a PACKET_GP response, and sets initialised=true.
+         *
+         * Sequence: MOS → VDP:  0x17 0x00 0x80 <echo>
+         *           VDP → MOS:  0x80|PACKET_GP(0x00), len=1, echo
+         *
+         * Our proto_feed parser already handles the PACKET_GP response
+         * (cmd=0x00) — it just discards it (no key to enqueue), which is
+         * correct.  The important thing is that the client sees 0x17 first.
+         */
+        {
+            uint8_t hs[4] = { 0x17, 0x00, 0x80, 0x00 };
+            send(fd, hs, sizeof(hs), 0);
+        }
 
         /* Read and parse loop */
         uint8_t byte;
