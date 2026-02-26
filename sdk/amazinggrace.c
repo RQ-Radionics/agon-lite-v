@@ -125,7 +125,12 @@ int _start(int argc, char **argv, t_mos_api *mos)
             uint16_t dur_ms = (uint16_t)(dur_bbc * 50);  /* 1/20s → ms */
 
             sound(1, AGON_VOL, freq, dur_ms);
-            wait_ms(dur_ms);
+            /* Wait the full note duration plus a small inter-note gap.
+             * The VDP plays asynchronously; without sysvars we can't poll
+             * channel status, so we add a fixed margin to avoid sending the
+             * next note command while the previous one is still playing.
+             * The 30ms margin also covers vTaskDelay tick rounding (10ms/tick). */
+            wait_ms((uint32_t)dur_ms + 30);
         }
         /* RESTORE: loop back to start of data automatically (while(1)) */
     }

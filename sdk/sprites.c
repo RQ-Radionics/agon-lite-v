@@ -1,31 +1,25 @@
 /*
  * sprites.c - Pacman sprite bouncing demo for ESP32-MOS
  *
- * Loads two 16x16 RGB bitmaps from the FAT filesystem (pacman1.rgb,
- * pacman2.rgb), uploads them to the Agon VDP as bitmaps, creates 32
- * sprites that bounce around the screen, and animates them by
- * alternating between the two frames (mouth open/closed).
+ * VDP Bitmap API (VDU 23,27,...):
+ *   0, n           - select bitmap n (8-bit; internally buffer 64000+n)
+ *   1, w; h; bytes - load RGBA8888 bitmap (4 bytes/pixel, R G B A order)
+ *                    NOTE: any non-zero alpha = fully visible
+ *   2, w; h; c1; c2; - create solid-colour bitmap (two colours, top/bottom)
+ *   3, x; y;       - draw current bitmap at pixel coords
  *
- * VDP Sprite/Bitmap API used:
- *   VDU 23,27,0,n        - select bitmap n (buffer id = 64000 + n)
- *   VDU 23,27,1,w;h; ... - define bitmap pixels (RGBA order: R,G,B,A)
- *                          NOTE: VDP expects R,G,B,A per pixel (RGBA8888)
- *                          .rgb files are raw R,G,B (3 bytes/pixel)
- *                          so we send: r, g, b, 255 (full alpha) per pixel
- *   VDU 23,27,4,n        - select sprite n
- *   VDU 23,27,5          - clear frames of current sprite
- *   VDU 23,27,6,n        - add bitmap n as frame to current sprite
- *   VDU 23,27,7,n        - activate n sprites
- *   VDU 23,27,11         - show current sprite
- *   VDU 23,27,13,x;y;    - move current sprite to pixel coords (x,y)
- *   VDU 23,27,15         - update/refresh all sprites
- *   VDU 23,27,8          - next frame of current sprite
- *
- * Screen: VDP always has 1280x1024 virtual coords regardless of mode.
- * In MODE 1 (512x384 pixel display): pixel coords map 1:1 in hardware,
- * but the sprite position uses logical pixel coordinates.
- * We use MODE 1 (256 colours, 512x384) for this demo.
- * Sprite pixel coords are 0-based from top-left.
+ * VDP Sprite API:
+ *   4, n           - select sprite n
+ *   5              - clear frames of current sprite
+ *   6, n           - add bitmap n (8-bit) as next frame
+ *   7, n           - activate n sprites
+ *   8              - next frame
+ *   11             - show current sprite
+ *   12             - hide current sprite
+ *   13, x; y;      - move to pixel coords
+ *   15             - update/refresh GPU sprites
+ *   16             - reset all bitmaps+sprites
+ *   17             - reset sprites only
  *
  * Build: make -C sdk
  * Run:   sprites
@@ -38,125 +32,73 @@
 #define SPRITE_W     16
 #define SPRITE_H     16
 
-/* Screen dimensions in pixels for MODE 1 (512x384) */
+/* MODE 1: 512x384 pixel screen */
 #define SCREEN_W     512
 #define SCREEN_H     384
 
-/* Bitmap IDs (0 = pacman open, 1 = pacman closed) */
-#define BMP_OPEN     0
-#define BMP_CLOSED   1
-
 static t_mos_api *g_mos;
 
-static inline void vdu(uint8_t b) { g_mos->putch(b); }
-
-static inline void vdu16(uint16_t v)
-{
+static inline void vdu(uint8_t b)  { g_mos->putch(b); }
+static inline void vdu16(uint16_t v) {
     vdu((uint8_t)(v & 0xFF));
     vdu((uint8_t)(v >> 8));
 }
 
-/* ── VDP bitmap/sprite helpers ──────────────────────────────────────────── */
+/* ── Bitmap commands ─────────────────────────────────────────────────────── */
 
-/* Select bitmap n for subsequent define or use */
-static void vdp_select_bitmap(uint8_t n)
+static void bmp_select(uint8_t n)
 {
     vdu(23); vdu(27); vdu(0); vdu(n);
 }
 
-/* Begin defining a WxH bitmap (pixels follow immediately after) */
-static void vdp_begin_bitmap(uint16_t w, uint16_t h)
+/* Send header for VDU 23,27,1 — pixel data must follow immediately */
+static void bmp_begin_rgba(uint8_t n, uint16_t w, uint16_t h)
 {
+    bmp_select(n);
     vdu(23); vdu(27); vdu(1);
-    vdu16(w);
-    vdu16(h);
+    vdu16(w); vdu16(h);
 }
 
-/* Select sprite n as the current sprite for subsequent sprite commands */
-static void vdp_select_sprite(uint8_t n)
-{
-    vdu(23); vdu(27); vdu(4); vdu(n);
+/* ── Sprite commands ─────────────────────────────────────────────────────── */
+
+static void spr_select(uint8_t n)       { vdu(23); vdu(27); vdu(4); vdu(n); }
+static void spr_clear_frames(void)      { vdu(23); vdu(27); vdu(5); }
+static void spr_add_frame(uint8_t bmp)  { vdu(23); vdu(27); vdu(6); vdu(bmp); }
+static void spr_activate(uint8_t n)     { vdu(23); vdu(27); vdu(7); vdu(n); }
+static void spr_next_frame(void)        { vdu(23); vdu(27); vdu(8); }
+static void spr_show(void)              { vdu(23); vdu(27); vdu(11); }
+static void spr_move(uint16_t x, uint16_t y) {
+    vdu(23); vdu(27); vdu(13); vdu16(x); vdu16(y);
 }
+static void spr_update(void)            { vdu(23); vdu(27); vdu(15); }
+static void spr_reset_all(void)         { vdu(23); vdu(27); vdu(16); }
 
-/* Clear all frames from current sprite */
-static void vdp_clear_frames(void)
-{
-    vdu(23); vdu(27); vdu(5);
-}
+/* ── Load 16x16 RGB file as RGBA bitmap ─────────────────────────────────── */
 
-/* Add bitmap n as next frame of current sprite */
-static void vdp_add_frame(uint8_t bitmap_id)
-{
-    vdu(23); vdu(27); vdu(6); vdu(bitmap_id);
-}
-
-/* Activate n sprites (must call before show/move) */
-static void vdp_activate_sprites(uint8_t n)
-{
-    vdu(23); vdu(27); vdu(7); vdu(n);
-}
-
-/* Show current sprite */
-static void vdp_show_sprite(void)
-{
-    vdu(23); vdu(27); vdu(11);
-}
-
-/* Move current sprite to pixel position (x, y) */
-static void vdp_move_sprite(uint16_t x, uint16_t y)
-{
-    vdu(23); vdu(27); vdu(13);
-    vdu16(x);
-    vdu16(y);
-}
-
-/* Advance current sprite to next frame */
-static void vdp_next_frame(void)
-{
-    vdu(23); vdu(27); vdu(8);
-}
-
-/* Refresh/display all sprites on screen */
-static void vdp_update_sprites(void)
-{
-    vdu(23); vdu(27); vdu(15);
-}
-
-/* ── Load RGB file → upload to VDP as bitmap ────────────────────────────── */
-
-/*
- * Load a 16x16 RGB raw file from the FAT and upload it as VDP bitmap `bmp_id`.
- * .rgb format: 768 bytes, 3 bytes per pixel (R, G, B), top-row first.
- * VDP RGBA format: 4 bytes per pixel (R, G, B, A).
- */
-static int load_bitmap(const char *path, uint8_t bmp_id)
+static int load_bitmap_from_file(const char *path, uint8_t bmp_id)
 {
     uint8_t fh = g_mos->fopen(path, "r");
     if (!fh) {
-        g_mos->puts("Cannot open: ");
+        g_mos->puts("  ERR: cannot open ");
         g_mos->puts(path);
         g_mos->puts("\r\n");
         return -1;
     }
 
-    vdp_select_bitmap(bmp_id);
-    vdp_begin_bitmap(SPRITE_W, SPRITE_H);
+    bmp_begin_rgba(bmp_id, SPRITE_W, SPRITE_H);
 
-    /* Stream pixels: read 3 bytes (RGB), send 4 bytes (RGBA) */
-    for (int row = 0; row < SPRITE_H; row++) {
-        /* Read one row of RGB pixels */
-        uint8_t rgb[SPRITE_W * 3];
-        size_t got = g_mos->fread(rgb, 1, SPRITE_W * 3, fh);
-        if (got != (size_t)(SPRITE_W * 3)) break;
-
-        /* Convert RGB → RGBA and send to VDP */
-        for (int col = 0; col < SPRITE_W; col++) {
-            uint8_t r = rgb[col * 3 + 0];
-            uint8_t g = rgb[col * 3 + 1];
-            uint8_t b = rgb[col * 3 + 2];
-            /* Black pixels → transparent */
-            uint8_t a = (r == 0 && g == 0 && b == 0) ? 0 : 255;
-            vdu(r); vdu(g); vdu(b); vdu(a);
+    /* Stream SPRITE_W*SPRITE_H pixels: 3 bytes RGB from file → 4 bytes RGBA to VDP */
+    uint8_t rgb[3];
+    for (int i = 0; i < SPRITE_W * SPRITE_H; i++) {
+        size_t got = g_mos->fread(rgb, 1, 3, fh);
+        if (got != 3) {
+            /* premature EOF — pad with transparent black */
+            vdu(0); vdu(0); vdu(0); vdu(0);
+        } else {
+            uint8_t r = rgb[0], g2 = rgb[1], b = rgb[2];
+            /* black background → transparent (alpha=0) */
+            uint8_t a = (r == 0 && g2 == 0 && b == 0) ? 0 : 255;
+            vdu(r); vdu(g2); vdu(b); vdu(a);
         }
     }
 
@@ -164,27 +106,28 @@ static int load_bitmap(const char *path, uint8_t bmp_id)
     return 0;
 }
 
-/* ── Simple pseudo-random LFSR ──────────────────────────────────────────── */
-static uint32_t s_rand = 0xDEADBEEF;
-static uint16_t rand16(void)
+/* ── Create a simple solid-colour 16x16 bitmap (no file needed) ─────────── */
+/* colour: 0xRRGGBBAA */
+static void make_solid_bitmap(uint8_t bmp_id, uint8_t r, uint8_t g2, uint8_t b)
 {
+    bmp_begin_rgba(bmp_id, SPRITE_W, SPRITE_H);
+    for (int i = 0; i < SPRITE_W * SPRITE_H; i++) {
+        vdu(r); vdu(g2); vdu(b); vdu(255);
+    }
+}
+
+/* ── LFSR pseudo-random ──────────────────────────────────────────────────── */
+static uint32_t s_rand = 0xDEADBEEF;
+static uint16_t rand16(void) {
     s_rand ^= s_rand << 13;
     s_rand ^= s_rand >> 17;
     s_rand ^= s_rand << 5;
     return (uint16_t)(s_rand & 0xFFFF);
 }
 
-/* ── Sprite state ───────────────────────────────────────────────────────── */
-typedef struct {
-    int16_t x, y;      /* current pixel position (top-left of sprite) */
-    int8_t  dx, dy;    /* velocity in pixels per frame */
-    uint8_t frame;     /* current frame (0 = open, 1 = closed) */
-} Sprite;
-
-static Sprite s_sprites[NUM_SPRITES];
-
-/* Yield-friendly delay via MOS API */
-static void wait_ms(uint32_t ms) { g_mos->delay_ms(ms); }
+/* ── Sprite state ─────────────────────────────────────────────────────────  */
+typedef struct { int16_t x, y; int8_t dx, dy; uint8_t frame; } Spr;
+static Spr s_spr[NUM_SPRITES];
 
 /* ── Entry point ─────────────────────────────────────────────────────────── */
 __attribute__((section(".text.entry")))
@@ -195,102 +138,95 @@ int _start(int argc, char **argv, t_mos_api *mos)
 
     /* MODE 1: 512x384, 256 colours */
     vdu(22); vdu(1);
+    mos->delay_ms(100);
 
-    mos->puts("Loading sprites...\r\n");
+    /* Full reset of bitmaps+sprites to clean state */
+    spr_reset_all();
+    mos->delay_ms(50);
 
-    /* Load both bitmaps */
-    if (load_bitmap("A:/pacman1.rgb", BMP_OPEN)   < 0) return 1;
-    if (load_bitmap("A:/pacman2.rgb", BMP_CLOSED) < 0) return 1;
+    mos->puts("Loading bitmaps...\r\n");
 
-    /* Give VDP time to process the bitmap data before issuing sprite commands */
-    mos->delay_ms(200);
+    /* Try to load from files; fall back to solid colours if missing */
+    int ok0 = load_bitmap_from_file("A:/pacman1.rgb", 0);
+    int ok1 = load_bitmap_from_file("A:/pacman2.rgb", 1);
+    if (ok0 < 0) { make_solid_bitmap(0, 255, 255,   0); } /* yellow */
+    if (ok1 < 0) { make_solid_bitmap(1, 255, 165,   0); } /* orange */
 
-    /* Set up sprites: each gets both frames */
+    /* Give VDP time to fully process all pixel data before sprite setup.
+     * At 115200 baud each byte = ~87µs; 2*16*16*4 = 2048 bytes ≈ 178ms.
+     * Add generous margin. */
+    mos->delay_ms(500);
+
+    mos->puts("Setting up sprites...\r\n");
+
+    /* Set up NUM_SPRITES sprites, each with 2 frames */
     for (int i = 0; i < NUM_SPRITES; i++) {
-        vdp_select_sprite((uint8_t)i);
-        vdp_clear_frames();
-        vdp_add_frame(BMP_OPEN);    /* frame 0 */
-        vdp_add_frame(BMP_CLOSED);  /* frame 1 */
+        spr_select((uint8_t)i);
+        spr_clear_frames();
+        spr_add_frame(0);   /* frame 0 = bitmap 0 (open) */
+        spr_add_frame(1);   /* frame 1 = bitmap 1 (closed) */
     }
 
-    /* Activate all sprites */
-    vdp_activate_sprites(NUM_SPRITES);
+    /* Activate sprites */
+    spr_activate(NUM_SPRITES);
+    mos->delay_ms(50);
 
-    /* Initialise sprite positions and velocities */
+    /* Initialise positions + velocities */
     for (int i = 0; i < NUM_SPRITES; i++) {
-        s_sprites[i].x  = (int16_t)(rand16() % (SCREEN_W - SPRITE_W));
-        s_sprites[i].y  = (int16_t)(rand16() % (SCREEN_H - SPRITE_H));
-        /* velocity: ±1..±3, never zero */
+        s_spr[i].x  = (int16_t)(rand16() % (SCREEN_W - SPRITE_W));
+        s_spr[i].y  = (int16_t)(rand16() % (SCREEN_H - SPRITE_H));
         int8_t vx = (int8_t)((rand16() % 3) + 1);
         int8_t vy = (int8_t)((rand16() % 3) + 1);
-        s_sprites[i].dx = (rand16() & 1) ? vx : (int8_t)-vx;
-        s_sprites[i].dy = (rand16() & 1) ? vy : (int8_t)-vy;
-        s_sprites[i].frame = (uint8_t)(i & 1);
+        s_spr[i].dx = (rand16() & 1) ? vx : (int8_t)-vx;
+        s_spr[i].dy = (rand16() & 1) ? vy : (int8_t)-vy;
+        s_spr[i].frame = 0;
     }
 
-    /* Show all sprites at initial positions */
+    /* Place and show all sprites */
     for (int i = 0; i < NUM_SPRITES; i++) {
-        vdp_select_sprite((uint8_t)i);
-        vdp_move_sprite((uint16_t)s_sprites[i].x, (uint16_t)s_sprites[i].y);
-        vdp_show_sprite();
+        spr_select((uint8_t)i);
+        spr_move((uint16_t)s_spr[i].x, (uint16_t)s_spr[i].y);
+        spr_show();
     }
-    vdp_update_sprites();
+    spr_update();
 
     mos->puts("Running - press a key to exit\r\n");
 
-    /* Main animation loop — use get_ticks_ms for frame pacing */
     uint32_t tick = 0;
     while (1) {
-        /* Non-blocking keypress check to exit */
         if (mos->kbhit()) { mos->getkey(); break; }
 
-        /* Move sprites, bounce off walls */
+        /* Move + bounce */
         for (int i = 0; i < NUM_SPRITES; i++) {
-            Sprite *sp = &s_sprites[i];
-            sp->x += sp->dx;
-            sp->y += sp->dy;
-
-            if (sp->x < 0) {
-                sp->x = 0;
-                sp->dx = (int8_t)-sp->dx;
-            } else if (sp->x > SCREEN_W - SPRITE_W) {
-                sp->x = SCREEN_W - SPRITE_W;
-                sp->dx = (int8_t)-sp->dx;
-            }
-            if (sp->y < 0) {
-                sp->y = 0;
-                sp->dy = (int8_t)-sp->dy;
-            } else if (sp->y > SCREEN_H - SPRITE_H) {
-                sp->y = SCREEN_H - SPRITE_H;
-                sp->dy = (int8_t)-sp->dy;
-            }
+            Spr *sp = &s_spr[i];
+            sp->x += sp->dx;  sp->y += sp->dy;
+            if (sp->x < 0)                  { sp->x = 0;                  sp->dx = (int8_t)-sp->dx; }
+            if (sp->x > SCREEN_W - SPRITE_W) { sp->x = SCREEN_W-SPRITE_W; sp->dx = (int8_t)-sp->dx; }
+            if (sp->y < 0)                  { sp->y = 0;                  sp->dy = (int8_t)-sp->dy; }
+            if (sp->y > SCREEN_H - SPRITE_H) { sp->y = SCREEN_H-SPRITE_H; sp->dy = (int8_t)-sp->dy; }
         }
 
-        /* Alternate frames every 8 ticks (~133ms at 60fps target) */
-        uint8_t show_frame = (uint8_t)((tick >> 3) & 1);
+        /* Alternate frames every 8 ticks (~133ms) */
+        uint8_t want_frame = (uint8_t)((tick >> 3) & 1);
 
-        /* Update all sprite positions and frames */
         for (int i = 0; i < NUM_SPRITES; i++) {
-            Sprite *sp = &s_sprites[i];
-            vdp_select_sprite((uint8_t)i);
-            vdp_move_sprite((uint16_t)sp->x, (uint16_t)sp->y);
-            /* Set correct frame: advance from current until we reach target */
-            if (sp->frame != show_frame) {
-                vdp_next_frame();
-                sp->frame = show_frame;
+            Spr *sp = &s_spr[i];
+            spr_select((uint8_t)i);
+            spr_move((uint16_t)sp->x, (uint16_t)sp->y);
+            if (sp->frame != want_frame) {
+                spr_next_frame();
+                sp->frame = want_frame;
             }
         }
-        vdp_update_sprites();
+        spr_update();
 
-        wait_ms(16); /* ~60fps */
+        mos->delay_ms(16);
         tick++;
     }
 
-    /* Deactivate sprites and restore text mode */
-    vdp_activate_sprites(0);
-    vdp_update_sprites();
-    vdu(22); vdu(0);   /* MODE 0 = default text mode */
-
+    spr_activate(0);
+    spr_update();
+    vdu(22); vdu(0);
     mos->puts("Done.\r\n");
     return 0;
 }
