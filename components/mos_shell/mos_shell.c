@@ -82,7 +82,6 @@ static int cmd_TIME(char *ptr);
 static int cmd_TRY(char *ptr);
 static int cmd_TYPE(char *ptr);
 static int cmd_UNSET(char *ptr);
-static int cmd_HELLOWORLD(char *ptr);
 static int cmd_RUN(char *ptr);
 
 /* -------------------------------------------------------------------------
@@ -125,7 +124,6 @@ static t_mosCommand s_commands[] = {
     { "Try",        cmd_TRY,        false, "<cmd>",                "Run command, ignore failure" },
     { "Type",       cmd_TYPE,       true,  "<file>",               "Display file contents" },
     { "Unset",      cmd_UNSET,      false, "<var>",                "Delete system variable" },
-    { "HELLOWORLD", cmd_HELLOWORLD, false, NULL,                   "Write hello to flash (test)" },
     { "Run",        cmd_RUN,        true,  "<file> [args]",         "Load and run a binary from filesystem" },
     { NULL, NULL, false, NULL, NULL }
 };
@@ -1258,29 +1256,6 @@ static int cmd_RUN(char *ptr)
     if (ret != 0) {
         mos_printf("RUN: program exited with code %d\r\n", ret);
     }
-    return FR_OK;
-}
-
-/* -------------------------------------------------------------------------
- * CMD: HELLOWORLD (test command)
- * ------------------------------------------------------------------------- */
-static int cmd_HELLOWORLD(char *ptr)
-{
-    (void)ptr;
-    if (!mos_fs_flash_mounted()) {
-        mos_printf("HELLOWORLD: flash not mounted\r\n");
-        return FR_INT_ERR;
-    }
-    const char *filepath = MOS_FLASH_MOUNT "/helloworld.txt";
-    FILE *f = fopen(filepath, "w");
-    if (!f) {
-        mos_printf("HELLOWORLD: cannot create '%s': %s\r\n", filepath, strerror(errno));
-        return FR_INT_ERR;
-    }
-    const char *msg = "Hello, World!\n";
-    fwrite(msg, 1, strlen(msg), f);
-    fclose(f);
-    mos_printf("Written '%s' (%u bytes)\r\n", filepath, (unsigned)strlen(msg));
     return FR_OK;
 }
 
