@@ -1,58 +1,70 @@
 /*
  * mos_user.ld - Linker script for ESP32-MOS user programs
  *
- * ESP32-S3 PSRAM is mapped into two virtual-address windows:
- *   IBUS (0x42000000): CPU fetches instructions from here
- *   DBUS (0x3C000000): CPU loads/stores data from here
+ * ESP32-S3 PSRAM virtual address windows (same physical pages):
+ *   IBUS (0x42000000): instruction fetch + 32-bit data loads only
+ *   DBUS (0x3C000000): byte/half/word data loads and stores
  *
- * The loader writes the binary to s_exec_arena (DBUS=0x3C0E0000) and jumps
- * via the IBUS alias (0x420E0000). Since PMS is disabled in sdkconfig, the
- * CPU can also perform data loads from the IBUS range — so l32r reads of
- * literal pools at IBUS addresses (0x420E...) work correctly.
+ * Code (.text, .literal) → VMA in IBUS (0x420E0000+)
+ *   l32r reads literal pool addresses via IBUS — 32-bit aligned, OK.
+ *   Function calls via callx8 work from IBUS.
  *
- * Everything is linked at IBUS (MOS_EXEC_BASE = 0x420E0000):
- *   - code addresses → IBUS (CPU fetches fine)
- *   - string/rodata pointers in literal pool → IBUS (readable with PMS off)
+ * Data (.rodata, .data) → VMA in DBUS (0x3C0E0000+)
+ *   Strings need byte loads (l8ui) which only work via DBUS.
+ *   LMA = VMA - DBUS_BASE + IBUS_BASE (= same physical byte in the flat binary)
  *
- * Entry: byte 0 = 'j _start' trampoline (mos_vector.S), jumps over literal pool
+ * The flat binary produced by objcopy -O binary has all sections at
+ * contiguous file offsets. Code fills 0x00..CODE_END, rodata follows
+ * immediately. objcopy computes file offsets from LMA, so rodata LMA
+ * must equal its natural continuation after .text in the file.
+ *
+ * Entry: byte 0 = 'j _start' trampoline (mos_vector.S)
  * Prototype: int _start(int argc, char **argv, t_mos_api *mos);
  */
 
 ENTRY(_start)
 
-/* IBUS alias of s_exec_arena: dbus=0x3C0E0000, ibus=0x420E0000 */
 MOS_EXEC_BASE = DEFINED(MOS_EXEC_BASE) ? MOS_EXEC_BASE : 0x420E0000;
+MOS_DBUS_BASE = DEFINED(MOS_DBUS_BASE) ? MOS_DBUS_BASE : 0x3C0E0000;
+BUS_OFFSET    = MOS_EXEC_BASE - MOS_DBUS_BASE;   /* 0x06000000 */
 
 MEMORY {
-    /* PSRAM instruction-bus window on ESP32-S3 (0x42000000-0x44000000) */
-    PSRAM (rwx) : ORIGIN = MOS_EXEC_BASE, LENGTH = 2M
+    IBUS (rx)  : ORIGIN = MOS_EXEC_BASE, LENGTH = 2M
+    DBUS (rw)  : ORIGIN = MOS_DBUS_BASE, LENGTH = 2M
 }
 
 SECTIONS {
+    /* ── Instruction bus: code ─────────────────────────────────────────────── */
     . = MOS_EXEC_BASE;
 
-    /* Byte 0: jump trampoline — loader always jumps here.
-     * KEEP so --gc-sections doesn't discard it. */
     .text.vector : {
-        KEEP(*(.text.vector))
-    } > PSRAM
+        KEEP(*(.text.vector))       /* byte 0: 'j _start' trampoline */
+    } > IBUS
 
-    /* Literal pools — placed immediately after trampoline, before _start */
     .literal : {
         *(.literal .literal.* .text.entry.literal .text.*.literal)
-    } > PSRAM
+    } > IBUS
 
     .text : {
-        *(.text.entry)   /* _start */
+        *(.text.entry)              /* _start */
         *(.text*)
+    } > IBUS
+
+    _ibus_end = .;
+
+    /* ── Data bus: rodata + data (same physical bytes, DBUS VMA) ───────────── */
+    /* LMA = IBUS address of the same bytes (flat binary: contiguous after .text).
+     * VMA = DBUS alias so byte loads (l8ui) work. */
+    .rodata : AT(_ibus_end) {
+        _dbus_start = .;
         *(.rodata*)
         *(.rodata)
-    } > PSRAM
+    } > DBUS
 
     . = ALIGN(4);
     .data : {
         *(.data*)
-    } > PSRAM
+    } > DBUS
 
     . = ALIGN(4);
     .bss (NOLOAD) : {
@@ -60,7 +72,7 @@ SECTIONS {
         *(.bss*)
         *(COMMON)
         __bss_end = .;
-    } > PSRAM
+    } > DBUS
 
     /DISCARD/ : { *(.comment) *(.note*) *(.ARM*) }
 }

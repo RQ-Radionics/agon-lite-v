@@ -26,8 +26,9 @@ INC_DIR  := $(SDK_DIR)../components/mos_api/include
 # ── Dirección de carga en PSRAM ──────────────────────────────────────────────
 # s_exec_arena DBUS (data window):        0x3C0E0000
 # s_exec_arena IBUS (instruction window): 0x420E0000  (= DBUS + 0x6000000)
-# Everything linked at IBUS; PMS disabled so l32r data reads from IBUS work.
+# Code (text/literal) → IBUS VMA; rodata/data → DBUS VMA; same flat binary.
 MOS_EXEC_BASE ?= 0x420E0000
+MOS_DBUS_BASE ?= 0x3C0E0000
 
 # ── Flags de compilación ─────────────────────────────────────────────────────
 # -mdynconfig selects little-endian + ESP32-S3 ISA (set via DYLD_LIBRARY_PATH)
@@ -54,6 +55,7 @@ ASFLAGS = \
 LDFLAGS = \
     -T$(SDK_DIR)mos_user.ld \
     -DMOS_EXEC_BASE=$(MOS_EXEC_BASE) \
+    -DMOS_DBUS_BASE=$(MOS_DBUS_BASE) \
     -nostdlib \
     -Wl,--gc-sections
 
