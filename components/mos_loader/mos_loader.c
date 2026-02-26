@@ -38,7 +38,7 @@ static const char *TAG = "mos_loader";
  * MOS_EXEC_BASE in sdk/Makefile MUST equal the IBUS alias of s_exec_arena:
  *   ibus_addr = (dbus_addr - SOC_MMU_DBUS_VADDR_BASE) + SOC_MMU_IBUS_VADDR_BASE
  * (check build/esp32-mos.map after first build for s_exec_arena dbus addr) */
-#define MOS_EXEC_SIZE   (64 * 1024)
+#define MOS_EXEC_SIZE   (512 * 1024)
 static EXT_RAM_BSS_ATTR __attribute__((aligned(32))) uint8_t s_exec_arena[MOS_EXEC_SIZE];
 
 /* Convert a PSRAM data-bus vaddr to its instruction-bus alias */
