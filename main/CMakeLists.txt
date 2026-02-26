@@ -1,0 +1,12 @@
+idf_component_register(
+    SRCS "main.c"
+    INCLUDE_DIRS "."
+    REQUIRES
+        mos_hal
+        mos_fs
+        mos_strings
+        mos_file
+        mos_sysvars
+        mos_editor
+        mos_shell
+)
