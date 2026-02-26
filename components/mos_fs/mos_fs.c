@@ -64,20 +64,30 @@ int mos_fs_mount_flash(void)
 /* ------------------------------------------------------------------ */
 
 /*
- * SPI GPIO defaults — override via sdkconfig or Kconfig.
- * These match a common ESP32 DevKit wiring; adjust as needed.
+ * SPI GPIO defaults for ESP32-S3 — override via sdkconfig or Kconfig.
+ *
+ * GPIO 19/20 on ESP32-S3 are USB D-/D+ and must be avoided.
+ * These are safe general-purpose pins on most ESP32-S3 DevKit boards.
+ * Adjust to match your hardware before flashing.
+ *
+ *  Signal  GPIO  Notes
+ *  ------  ----  -----
+ *  MOSI     11   SPI2 default on ESP32-S3
+ *  MISO     13   SPI2 default on ESP32-S3
+ *  CLK      12   SPI2 default on ESP32-S3
+ *  CS       10   Chip select
  */
 #ifndef MOS_SD_PIN_MOSI
-#define MOS_SD_PIN_MOSI  23
+#define MOS_SD_PIN_MOSI  11
 #endif
 #ifndef MOS_SD_PIN_MISO
-#define MOS_SD_PIN_MISO  19
+#define MOS_SD_PIN_MISO  13
 #endif
 #ifndef MOS_SD_PIN_CLK
-#define MOS_SD_PIN_CLK   18
+#define MOS_SD_PIN_CLK   12
 #endif
 #ifndef MOS_SD_PIN_CS
-#define MOS_SD_PIN_CS     5
+#define MOS_SD_PIN_CS    10
 #endif
 #define MOS_SD_SPI_HOST  SPI2_HOST
 

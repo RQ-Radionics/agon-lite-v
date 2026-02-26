@@ -31,6 +31,7 @@
 #include "mos_strings.h"
 #include "mos_editor.h"
 #include "mos_types.h"
+#include "esp_heap_caps.h"
 
 /* Shell-specific MATCH flags for command lookup */
 #define SHELL_MATCH_CMD  (MATCH_CASE_INSENSITIVE | MATCH_BEGINS_WITH | \
@@ -912,12 +913,8 @@ static int cmd_IFTHERE(char *ptr)
 static int cmd_MEM(char *ptr)
 {
     (void)ptr;
-    /* ESP-IDF heap info */
-    extern size_t heap_caps_get_free_size(uint32_t caps);
-    extern size_t heap_caps_get_largest_free_block(uint32_t caps);
-
-    size_t free_heap  = heap_caps_get_free_size(0 /*MALLOC_CAP_DEFAULT*/);
-    size_t largest    = heap_caps_get_largest_free_block(0);
+    size_t free_heap  = heap_caps_get_free_size(MALLOC_CAP_DEFAULT);
+    size_t largest    = heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT);
     mos_printf("Free heap:    %u bytes\r\n", (unsigned)free_heap);
     mos_printf("Largest block: %u bytes\r\n", (unsigned)largest);
     mos_printf("Flash mount:  %s\r\n", MOS_FLASH_MOUNT);
