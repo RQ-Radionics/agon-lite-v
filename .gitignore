@@ -8,6 +8,7 @@ build/
 sdk/*.elf
 sdk/*.bin
 sdk/*.map
+sdk/*.o
 sdk/helloworld
 
 # Python

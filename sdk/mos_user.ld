@@ -1,11 +1,16 @@
 /*
  * mos_user.ld - Linker script for ESP32-MOS user programs
  *
- * Produces a flat binary (objcopy -O binary) suitable for loading into
- * PSRAM by mos_loader.  The binary is position-DEPENDENT — it must be
- * loaded at exactly MOS_EXEC_BASE (default 0x3C000000).
+ * Produces a flat binary (objcopy -O binary) loaded into PSRAM by mos_loader.
+ * The loader jumps to byte 0 of the binary.
  *
- * Entry point: _start
+ * Layout at MOS_EXEC_BASE:
+ *   [0x00] .text.vector  — 3-byte 'j _start' trampoline (byte 0 = entry)
+ *   [0x03] .literal*     — l32r literal pools (must be within ±256KB of user)
+ *   [aligned] .text.entry — _start
+ *   [...] .text*, .rodata*, .data*
+ *
+ * Entry point: _start (jumped to via trampoline at byte 0)
  * Prototype:   int _start(int argc, char **argv, t_mos_api *mos);
  */
 
@@ -23,8 +28,20 @@ MEMORY {
 SECTIONS {
     . = MOS_EXEC_BASE;
 
+    /* Byte 0: jump trampoline — loader always jumps here.
+     * KEEP so --gc-sections doesn't discard it (nothing calls it). */
+    .text.vector : {
+        KEEP(*(.text.vector))
+    } > PSRAM
+
+    /* Literal pools immediately after trampoline, before code */
+    .literal : {
+        *(.literal .literal.* .text.entry.literal .text.*.literal)
+    } > PSRAM
+
+    . = ALIGN(4);
     .text : {
-        *(.text.entry)   /* _start must be first */
+        *(.text.entry)   /* _start */
         *(.text*)
         *(.rodata*)
     } > PSRAM

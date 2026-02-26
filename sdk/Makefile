@@ -10,6 +10,7 @@
 
 # ── Toolchain ────────────────────────────────────────────────────────────────
 CC      = xtensa-esp-elf-gcc
+AS      = xtensa-esp-elf-gcc
 OBJCOPY = xtensa-esp-elf-objcopy
 OBJDUMP = xtensa-esp-elf-objdump
 
@@ -18,7 +19,6 @@ SDK_DIR  := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 INC_DIR  := $(SDK_DIR)../components/mos_api/include
 
 # ── Dirección de carga en PSRAM ──────────────────────────────────────────────
-# Debe coincidir con MOS_EXEC_BASE en mos_loader.h
 # IBUS alias of the exec arena: s_exec_arena dbus=0x3C0E0000 → ibus=0x420E0000
 # Formula: ibus = (dbus - 0x3C000000) + 0x42000000
 MOS_EXEC_BASE ?= 0x420E0000
@@ -36,36 +36,48 @@ CFLAGS = \
     -Wextra \
     -I$(INC_DIR)
 
+ASFLAGS = \
+    -mlongcalls \
+    -nostdlib
+
 LDFLAGS = \
     -T$(SDK_DIR)mos_user.ld \
     -DMOS_EXEC_BASE=$(MOS_EXEC_BASE) \
     -nostdlib \
     -Wl,--gc-sections
 
+# ── Shared objects (linked into every program) ────────────────────────────────
+COMMON_SRCS := $(SDK_DIR)mos_vector.S
+COMMON_OBJS := $(SDK_DIR)mos_vector.o
+
 # ── Reglas ───────────────────────────────────────────────────────────────────
-SRCS    := $(wildcard *.c)
-ELFS    := $(SRCS:.c=.elf)
-BINS    := $(SRCS:.c=.bin)
+SRCS    := $(wildcard $(SDK_DIR)*.c)
+BINS    := $(patsubst $(SDK_DIR)%.c,$(SDK_DIR)%.bin,$(SRCS))
 
 .PHONY: all clean disasm
 
 all: $(BINS)
 
-# Compilar .c → .elf
-%.elf: %.c $(SDK_DIR)mos_user.ld
-	$(CC) $(CFLAGS) $(LDFLAGS) -Wl,-Map,$*.map -o $@ $<
+# Compile common assembly
+$(SDK_DIR)mos_vector.o: $(SDK_DIR)mos_vector.S
+	$(AS) $(ASFLAGS) -c -o $@ $<
+
+# Compilar .c → .elf  (mos_vector.o linked first so .text.vector is at offset 0)
+$(SDK_DIR)%.elf: $(SDK_DIR)%.c $(SDK_DIR)mos_user.ld $(COMMON_OBJS)
+	$(CC) $(CFLAGS) $(LDFLAGS) -Wl,-Map,$(SDK_DIR)$*.map \
+	    -o $@ $(COMMON_OBJS) $<
 
 # ELF → binario plano
-%.bin: %.elf
+$(SDK_DIR)%.bin: $(SDK_DIR)%.elf
 	$(OBJCOPY) -O binary $< $@
 	@echo "  → $@ ($$(wc -c < $@) bytes)"
 
 # Desensamblar para depuración
-disasm: $(ELFS)
+disasm: $(patsubst $(SDK_DIR)%.c,$(SDK_DIR)%.elf,$(SRCS))
 	for f in $^; do \
 	    $(OBJDUMP) -d $$f > $${f%.elf}.asm; \
 	    echo "  → $${f%.elf}.asm"; \
 	done
 
 clean:
-	rm -f *.elf *.bin *.map *.asm
+	rm -f $(SDK_DIR)*.elf $(SDK_DIR)*.bin $(SDK_DIR)*.map $(SDK_DIR)*.asm $(SDK_DIR)*.o

@@ -14,8 +14,7 @@
 
 #include "mos_api_table.h"
 
-/* El loader llama a _start(argc, argv, mos).
- * DEBE estar en la sección .text.entry para que el linker la coloque primera. */
+/* El loader llama a _start(argc, argv, mos) vía el trampoline en mos_vector.S. */
 __attribute__((section(".text.entry")))
 int _start(int argc, char **argv, t_mos_api *mos)
 {
