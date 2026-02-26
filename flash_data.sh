@@ -52,11 +52,14 @@ fi
 mkdir -p "${SCRIPT_DIR}/build"
 
 # ---- build FAT image ----
+# --wl_mode perf: must match esp_vfs_fat_spiflash_mount_rw_wl() which uses wear levelling
 echo "Building FAT image from ${DATA_DIR} ..."
 "${PYTHON}" "${FATFSGEN}" \
     --output_file "${IMAGE}" \
     --partition_size ${PARTITION_SIZE} \
+    --sector_size 512 \
     --long_name_support \
+    --wl_mode perf \
     "${DATA_DIR}"
 
 echo "Image: ${IMAGE} ($(wc -c < "${IMAGE}") bytes)"
