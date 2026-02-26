@@ -79,9 +79,13 @@ void app_main(void)
     }
 
     /* 6. VDP TCP server */
+    bool vdp_ok = false;
     if (wifi_ok == 0) {
         if (mos_vdp_init() == 0) {
-            mos_printf("VDP server listening on port %d\n", MOS_VDP_TCP_PORT);
+            vdp_ok = true;
+            /* Tell user on UART where to connect */
+            mos_printf("VDP server listening on port %d — connect to start shell\n",
+                       MOS_VDP_TCP_PORT);
         } else {
             mos_printf("VDP server failed to start\n");
         }
@@ -93,26 +97,43 @@ void app_main(void)
     /* 8. Shell init (variables, history) */
     mos_shell_init();
 
-    /* 8. Welcome banner */
-    mos_printf("\n");
-    mos_printf("ESP32-MOS v" VERSION_STRING " " VERSION_VARIANT " \"" VERSION_SUBTITLE "\"\n");
-    mos_printf("Flash: %s  SD: %s  WiFi: %s  VDP: port %d\n",
-               mos_fs_flash_mounted() ? "OK"   : "FAIL",
-               mos_fs_sd_mounted()    ? "OK"   : "N/A",
-               mos_wifi_is_connected()? "OK"   : "FAIL",
-               MOS_VDP_TCP_PORT);
-    mos_printf("Type HELP for commands.\n\n");
+    /* 9. Session loop — each VDP connection (or UART if no VDP) is one session */
+    while (1) {
+        /* If VDP is available, wait for a client to connect */
+        if (vdp_ok) {
+            ESP_LOGI(TAG, "Waiting for VDP client on port %d…", MOS_VDP_TCP_PORT);
+            while (!mos_vdp_connected()) {
+                vTaskDelay(pdMS_TO_TICKS(100));
+            }
+            ESP_LOGI(TAG, "VDP client connected — starting shell session");
+        }
 
-    /* 9. Run autoexec if present */
-    char autoexec[64];
-    snprintf(autoexec, sizeof(autoexec), "%s/autoexec.obey", MOS_FLASH_MOUNT);
-    FILE *f = fopen(autoexec, "r");
-    if (f) {
-        fclose(f);
-        ESP_LOGI(TAG, "Running %s", autoexec);
-        mos_shell_exec("EXEC " MOS_FLASH_MOUNT "/autoexec.obey");
+        /* Welcome banner — printed at the start of every session */
+        mos_printf("\n");
+        mos_printf("ESP32-MOS v" VERSION_STRING " " VERSION_VARIANT " \"" VERSION_SUBTITLE "\"\n");
+        mos_printf("Flash: %s  SD: %s  WiFi: %s  VDP: port %d\n",
+                   mos_fs_flash_mounted() ? "OK"   : "FAIL",
+                   mos_fs_sd_mounted()    ? "OK"   : "N/A",
+                   mos_wifi_is_connected()? "OK"   : "FAIL",
+                   MOS_VDP_TCP_PORT);
+        mos_printf("Type HELP for commands.\n\n");
+
+        /* Run autoexec if present */
+        char autoexec[64];
+        snprintf(autoexec, sizeof(autoexec), "%s/autoexec.bat", MOS_FLASH_MOUNT);
+        FILE *f = fopen(autoexec, "r");
+        if (f) {
+            fclose(f);
+            ESP_LOGI(TAG, "Running %s", autoexec);
+            mos_shell_exec("EXEC " MOS_FLASH_MOUNT "/autoexec.bat");
+        }
+
+        /* Interactive shell — returns when VDP disconnects (or never if UART) */
+        mos_shell_run();
+
+        /* If no VDP, mos_shell_run never returns — we only get here on disconnect */
+        if (!vdp_ok) break;  /* safety: should never happen */
+
+        ESP_LOGI(TAG, "VDP client disconnected — waiting for next connection");
     }
-
-    /* 10. Interactive shell loop (never returns) */
-    mos_shell_run();
 }

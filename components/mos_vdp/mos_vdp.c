@@ -131,6 +131,10 @@ static void vdp_server_task(void *arg)
         s_connected = false;
         xSemaphoreGive(s_sock_mu);
 
+        /* Unblock any task waiting in mos_vdp_getch() — sentinel byte wakes it */
+        uint8_t sentinel = 0xFF;
+        xQueueSendToFront(s_rx_queue, &sentinel, 0);
+
         ESP_LOGI(TAG, "Waiting for next VDP connection…");
     }
 }
@@ -188,6 +192,8 @@ int mos_vdp_getch(void)
         vTaskDelay(pdMS_TO_TICKS(50));
     }
     if (xQueueReceive(s_rx_queue, &byte, portMAX_DELAY) == pdTRUE) {
+        /* 0xFF sentinel means the connection dropped while we were waiting */
+        if (!s_connected && byte == 0xFF) return -1;
         return (int)byte;
     }
     return -1;

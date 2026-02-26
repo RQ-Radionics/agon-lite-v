@@ -1300,7 +1300,7 @@ void mos_shell_run(void)
         free(prompt_var);
 
         int r = mos_editor_readline(full_prompt, line, sizeof(line));
-        if (r < 0) continue;
+        if (r < 0) return;  /* VDP disconnected (or EOF) — end this session */
         if (!*line) continue;
 
         int result = mos_exec(line);
