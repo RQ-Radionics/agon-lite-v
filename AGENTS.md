@@ -84,7 +84,14 @@ _dbus_data_start = _ibus_end - BUS_OFFSET;   /* DBUS alias of where code ends */
 
 Do NOT use `> DBUS` for data sections — it overrides the explicit VMA.
 
-## BBC BASIC Heap Init — CRITICAL (commit 8e9164c)
+## BBC BASIC Memory — CRITICAL
+
+### Heap allocation (commit e02b038)
+`mos->malloc` now calls `heap_caps_malloc(size, MALLOC_CAP_SPIRAM)` so user
+programs draw from the 8 MB PSRAM, not internal DRAM (~300 KB).
+`bbccon_esp32.h` sets `DEFAULT_RAM = 2 MB`, `MAXIMUM_RAM = 6 MB`.
+
+### Heap Init — CRITICAL (commit 8e9164c)
 
 `malloc()` on ESP32/FreeRTOS does **NOT** zero memory. BBC BASIC's `clear()` calls
 `gettop()` on `progRAM` to find the end of the (empty) program. If `progRAM` has
