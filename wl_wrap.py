@@ -123,8 +123,22 @@ def make_state(flash_size, state_size, cfg):
 
     device_id = random.randint(0, 0xFFFFFFFF)
 
+    # wl_dummy_sec_pos must be 1, NOT 0.
+    #
+    # calcAddr(logical_addr) remaps logical→physical:
+    #   result = (flash_size - move_count*page + addr) % flash_size
+    #   if result >= dummy_addr: result += page_size
+    #
+    # With pos=0, move_count=0:
+    #   calcAddr(0) → result=0, dummy_addr=0 → 0>=0 → result+=512 → reads physical offset 512 (BPB not found!)
+    #
+    # With pos=1, move_count=0:
+    #   calcAddr(0) → result=0, dummy_addr=512 → 0<512 → no shift → reads physical offset 0 (BPB correct ✓)
+    #
+    # pos=1 means the dummy (erased) sector lives at physical offset 512, and logical sector 0
+    # maps directly to physical offset 0 — which is where fatfsgen places the FAT BPB.
     fields = [
-        0,                              # wl_dummy_sec_pos
+        1,                              # wl_dummy_sec_pos  ← MUST be 1, not 0
         wl_part_max_sec_pos,            # wl_part_max_sec_pos
         0,                              # wl_dummy_sec_move_count
         0,                              # wl_sec_erase_cycle_count
