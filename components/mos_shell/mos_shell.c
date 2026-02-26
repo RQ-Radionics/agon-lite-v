@@ -341,30 +341,58 @@ int mos_exec(char *buffer)
         return result;
     }
 
-    /* Not a built-in — try to find <command>.bin in cwd, then /flash */
+    /* Not a built-in — try to find <command>.bbc or <command>.bin */
     {
-        char binname[64];   /* command names are short */
+        char name[64];
         char resolved[MOS_PATH_MAX];
-        snprintf(binname, sizeof(binname) - 4, "%.*s", cmdLen, commandPtr);
-        /* Append .bin safely */
-        size_t blen = strlen(binname);
-        memcpy(binname + blen, ".bin", 5);
+        char interp[MOS_PATH_MAX];
+        snprintf(name, sizeof(name), "%.*s", cmdLen, commandPtr);
 
-        /* Search order: current directory, then /flash root */
         const char *search[] = { mos_fs_getcwd(), MOS_FLASH_MOUNT, NULL };
-        bool found = false;
-        for (int si = 0; search[si] && !found; si++) {
-            snprintf(resolved, sizeof(resolved), "%s/%s", search[si], binname);
+
+        /* 1. BBC BASIC script: <name>.bbc — run via bbcbasic.bin */
+        char bbcname[68];
+        snprintf(bbcname, sizeof(bbcname), "%s.bbc", name);
+        bool found_bbc = false;
+        for (int si = 0; search[si] && !found_bbc; si++) {
+            snprintf(resolved, sizeof(resolved), "%s/%s", search[si], bbcname);
             FILE *probe = fopen(resolved, "rb");
-            if (probe) { fclose(probe); found = true; }
+            if (probe) { fclose(probe); found_bbc = true; }
+        }
+        if (found_bbc) {
+            /* Find bbcbasic.bin in cwd or /flash */
+            bool found_interp = false;
+            for (int si = 0; search[si] && !found_interp; si++) {
+                snprintf(interp, sizeof(interp), "%s/bbcbasic.bin", search[si]);
+                FILE *probe = fopen(interp, "rb");
+                if (probe) { fclose(probe); found_interp = true; }
+            }
+            if (!found_interp) {
+                mos_printf("bbcbasic.bin not found\r\n");
+                return FR_NO_FILE;
+            }
+            char *argv_buf[3] = { "bbcbasic.bin", resolved, NULL };
+            int ret = mos_loader_exec(interp, 2, argv_buf);
+            if (ret < 0) {
+                mos_printf("Failed to run '%s'\r\n", bbcname);
+                return FR_INT_ERR;
+            }
+            return FR_OK;
         }
 
-        if (found) {
-            /* Build argv and delegate to loader */
+        /* 2. Native binary: <name>.bin */
+        char binname[68];
+        snprintf(binname, sizeof(binname), "%s.bin", name);
+        bool found_bin = false;
+        for (int si = 0; search[si] && !found_bin; si++) {
+            snprintf(resolved, sizeof(resolved), "%s/%s", search[si], binname);
+            FILE *probe = fopen(resolved, "rb");
+            if (probe) { fclose(probe); found_bin = true; }
+        }
+        if (found_bin) {
             char *argv_buf[17];
             int   argc = 0;
             argv_buf[argc++] = binname;
-            /* Tokenise remaining args (argsPtr already trimmed) */
             char *ap = argsPtr;
             char *arg;
             while (argc < 16) {
