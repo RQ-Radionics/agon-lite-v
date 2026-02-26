@@ -61,18 +61,28 @@ SECTIONS {
         _dbus_start = .;
         *(.rodata*)
         *(.rodata)
+        . = ALIGN(4);
     }
+    _rodata_lma_end = _ibus_end + SIZEOF(.rodata);
 
-    . = ALIGN(4);
-    .data : {
+    /* .data: VMA in DBUS (for byte-accessible r/w), LMA continues after .rodata
+     * in the flat binary (same file offset trick as .rodata). */
+    .data ALIGN(_dbus_data_start + SIZEOF(.rodata), 4)
+          : AT(ALIGN(_rodata_lma_end, 4)) {
         *(.data*)
+        . = ALIGN(4);
     }
 
-    . = ALIGN(4);
-    .bss (NOLOAD) : {
+    /* _data_end: DBUS VMA just after .data.  BSS follows here at runtime.
+     * We must set VMA explicitly because NOLOAD sections do not advance
+     * the location counter in the same way as LOAD sections. */
+    _data_end = ALIGN(. , 4);
+
+    .bss _data_end (NOLOAD) : {
         __bss_start = .;
         *(.bss*)
         *(COMMON)
+        . = ALIGN(4);
         __bss_end = .;
     }
 
