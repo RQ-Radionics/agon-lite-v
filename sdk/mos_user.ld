@@ -11,11 +11,13 @@
 
 ENTRY(_start)
 
-MOS_EXEC_BASE = DEFINED(MOS_EXEC_BASE) ? MOS_EXEC_BASE : 0x3C0E0000;
+/* IBUS alias: dbus=0x3C0E0000 → ibus=0x420E0000 (CPU fetches code from IBUS) */
+MOS_EXEC_BASE = DEFINED(MOS_EXEC_BASE) ? MOS_EXEC_BASE : 0x420E0000;
 
 MEMORY {
-    /* PSRAM window on ESP32-S3 mapped via MMU */
-    PSRAM (rwx) : ORIGIN = MOS_EXEC_BASE, LENGTH = 4M
+    /* PSRAM instruction-bus window on ESP32-S3 (0x42000000-0x44000000).
+     * CPU fetches code from here; data window is at 0x3C000000+same offset. */
+    PSRAM (rwx) : ORIGIN = MOS_EXEC_BASE, LENGTH = 2M
 }
 
 SECTIONS {

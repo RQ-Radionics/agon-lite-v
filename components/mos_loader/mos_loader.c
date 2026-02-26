@@ -21,6 +21,7 @@
 #include "esp_attr.h"
 #include "esp_heap_caps.h"
 #include "esp_cache.h"
+#include "soc/ext_mem_defs.h"
 
 #include "mos_loader.h"
 #include "mos_fs.h"
@@ -30,11 +31,22 @@
 static const char *TAG = "mos_loader";
 
 /* Fixed PSRAM exec arena — 64 KB, 32-byte aligned (cache line).
- * EXT_RAM_BSS_ATTR places it in .ext_ram.bss → PSRAM at a stable address.
- * MOS_EXEC_BASE in sdk/Makefile MUST match the address the linker assigns
- * to s_exec_arena (check build/esp32-mos.map after first build). */
+ * EXT_RAM_BSS_ATTR places it in .ext_ram.bss → PSRAM data window (0x3Cxxxxxx).
+ * The same physical pages are also accessible via the instruction window
+ * (0x42xxxxxx) which the CPU uses to fetch code.
+ *
+ * MOS_EXEC_BASE in sdk/Makefile MUST equal the IBUS alias of s_exec_arena:
+ *   ibus_addr = (dbus_addr - SOC_MMU_DBUS_VADDR_BASE) + SOC_MMU_IBUS_VADDR_BASE
+ * (check build/esp32-mos.map after first build for s_exec_arena dbus addr) */
 #define MOS_EXEC_SIZE   (64 * 1024)
 static EXT_RAM_BSS_ATTR __attribute__((aligned(32))) uint8_t s_exec_arena[MOS_EXEC_SIZE];
+
+/* Convert a PSRAM data-bus vaddr to its instruction-bus alias */
+static inline void *dbus_to_ibus(const void *dbus_ptr)
+{
+    uint32_t offset = (uint32_t)dbus_ptr - SOC_MMU_DBUS_VADDR_BASE;
+    return (void *)(SOC_MMU_IBUS_VADDR_BASE + offset);
+}
 
 /* Entry point prototype for user programs */
 typedef int (*mos_entry_t)(int argc, char **argv, t_mos_api *mos);
@@ -92,8 +104,13 @@ int mos_loader_exec(const char *path, int argc, char **argv)
         return -1;
     }
 
-    /* 5. Jump to entry point */
-    mos_entry_t entry = (mos_entry_t)(void *)s_exec_arena;
+    /* 5. Jump via instruction-bus alias (0x42xxxxxx).
+     * s_exec_arena is in the data window (0x3Cxxxxxx); the same physical
+     * PSRAM pages are also mapped at the instruction window (0x42xxxxxx).
+     * The CPU can only fetch code from the IBUS range. */
+    void *ibus_entry = dbus_to_ibus(s_exec_arena);
+    mos_entry_t entry = (mos_entry_t)ibus_entry;
+    ESP_LOGI(TAG, "dbus @ %p  ibus @ %p", s_exec_arena, ibus_entry);
     ESP_LOGI(TAG, "Jumping to entry @ %p", entry);
 
     int ret = entry(argc, argv, mos_api_table_get());
