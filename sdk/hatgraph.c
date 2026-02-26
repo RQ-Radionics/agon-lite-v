@@ -102,7 +102,8 @@ static t_mos_api *g_mos;
 static inline void vdu(uint8_t b)   { g_mos->putch(b); }
 
 static void vdu_cls(void)           { vdu(12); }  /* CLS */
-static void vdu_mode(uint8_t m)     { vdu(22); vdu(m); }
+/* GCOL 0, colour */
+static void vdu_gcol(uint8_t colour){ vdu(18); vdu(0); vdu(colour); }
 
 static void vdu_plot_point(int x, int y)
 {
@@ -119,9 +120,10 @@ int _start(int argc, char **argv, t_mos_api *mos)
     (void)argc; (void)argv;
     g_mos = mos;
 
-    /* Use current mode (or set a specific one if needed) */
-    vdu_mode(1);   /* 320×256, 64 colours — matches original context */
+    /* Original had no MODE command — use whatever mode was already set.
+     * Just clear the screen and set foreground colour to white (15). */
     vdu_cls();
+    vdu_gcol(15);   /* white, visible in any palette */
 
     const double XP = 144.0;
     const double XR = 4.71238905;   /* 3π/2 */

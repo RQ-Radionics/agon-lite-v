@@ -77,6 +77,7 @@ static int cmd_REN(char *ptr);
 static int cmd_SET(char *ptr);
 static int cmd_SETEVAL(char *ptr);
 static int cmd_SETMACRO(char *ptr);
+static int cmd_MODE(char *ptr);
 static int cmd_SHOW(char *ptr);
 static int cmd_TIME(char *ptr);
 static int cmd_TRY(char *ptr);
@@ -109,6 +110,7 @@ static t_mosCommand s_commands[] = {
     { "LS",         cmd_DIR,        true,  "[path]",               "List directory" },
     { "Mem",        cmd_MEM,        false, NULL,                   "Show memory info" },
     { "MkDir",      cmd_MKDIR,      true,  "<path>",               "Make directory" },
+    { "Mode",       cmd_MODE,       false, "<n>",                  "Set screen mode (VDU 22,n)" },
     { "Mount",      cmd_MOUNT,      false, NULL,                   "Remount SD card" },
     { "Move",       cmd_REN,        true,  "<src> <dst>",          "Rename/move file" },
     { "MV",         cmd_REN,        true,  "<src> <dst>",          "Rename/move file" },
@@ -554,6 +556,26 @@ static int cmd_CLS(char *ptr)
 {
     (void)ptr;
     mos_putch(12);   /* VDU 12 — clear screen (BBC Micro / Agon VDP) */
+    return FR_OK;
+}
+
+/* -------------------------------------------------------------------------
+ * CMD: MODE
+ * ------------------------------------------------------------------------- */
+static int cmd_MODE(char *ptr)
+{
+    while (*ptr == ' ') ptr++;
+    if (!*ptr) {
+        mos_puts("Usage: MODE <n>\r\n");
+        return FR_OK;
+    }
+    int n = atoi(ptr);
+    if (n < 0 || n > 255) {
+        mos_puts("Mode out of range\r\n");
+        return FR_INVALID_PARAMETER;
+    }
+    mos_putch(22);              /* VDU 22 — MODE */
+    mos_putch((uint8_t)n);
     return FR_OK;
 }
 
