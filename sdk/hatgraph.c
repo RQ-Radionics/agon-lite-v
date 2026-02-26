@@ -47,19 +47,25 @@
 
 /* ── Math helpers (double precision, no libm needed) ────────────────────── */
 
-/* Square root via Newton-Raphson (good to ~15 significant digits) */
+/* Square root via Newton-Raphson.
+ * Initial estimate by bit-manipulation of the IEEE 754 double exponent
+ * (halving the exponent gives a good first approximation for any magnitude),
+ * then iterate until converged. */
 static double d_sqrt(double x)
 {
     if (x <= 0.0) return 0.0;
-    /* Initial estimate using bit-manipulation on the double representation */
-    double r = x;
-    /* 6 iterations of Newton-Raphson converge for any positive double */
+    /* Bit-twiddled initial estimate: reinterpret double bits, halve exponent.
+     * This gives ~8 significant bits (enough for fast N-R convergence). */
+    union { double d; uint64_t u; } v;
+    v.d = x;
+    v.u = (v.u >> 1) + (0x3FF0000000000000ULL >> 1);  /* halve exponent */
+    double r = v.d;
+    /* Newton-Raphson: each step doubles significant bits.
+     * Start ~8 bits → 3 steps → 64 bits (full double precision). */
     r = (r + x / r) * 0.5;
     r = (r + x / r) * 0.5;
     r = (r + x / r) * 0.5;
-    r = (r + x / r) * 0.5;
-    r = (r + x / r) * 0.5;
-    r = (r + x / r) * 0.5;
+    r = (r + x / r) * 0.5;  /* extra step for safety */
     return r;
 }
 
