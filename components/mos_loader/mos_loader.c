@@ -92,15 +92,41 @@ int mos_loader_exec(const char *path, int argc, char **argv)
         return -1;
     }
 
-    /* 4. Flush dcache → PSRAM, then invalidate icache so CPU fetches fresh.
-     * Size must be rounded up to cache-line (32 bytes). */
+    /* 4. Sync caches so the CPU sees the freshly-loaded binary.
+     *
+     * fread() writes through the CPU (FAT/WL driver uses memcpy), so the
+     * data lands in the dcache as dirty lines — NOT yet in physical PSRAM.
+     *
+     * Step A: C2M writeback — flush dirty dcache lines to physical PSRAM.
+     *         With INVALIDATE, also drop those lines from dcache so future
+     *         firmware reads from DBUS (0x3Cxxxxxx) reload from PSRAM.
+     *
+     * Step B: M2C invalidate icache — drop stale icache lines for the IBUS
+     *         window (0x42xxxxxx) so the CPU fetches fresh code from PSRAM.
+     *         The IBUS address is the DBUS address + 0x6000000.
+     *
+     * Size rounded up to cache-line boundary (32 bytes). */
     size_t sync_size = (size + 31) & ~31u;
+
+    /* Step A: write back dcache → PSRAM, then invalidate dcache lines */
     esp_err_t err = esp_cache_msync(s_exec_arena, sync_size,
                                     ESP_CACHE_MSYNC_FLAG_DIR_C2M |
                                     ESP_CACHE_MSYNC_FLAG_INVALIDATE |
+                                    ESP_CACHE_MSYNC_FLAG_TYPE_DATA |
                                     ESP_CACHE_MSYNC_FLAG_UNALIGNED);
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "esp_cache_msync failed: %s", esp_err_to_name(err));
+        ESP_LOGE(TAG, "esp_cache_msync (C2M data) failed: %s", esp_err_to_name(err));
+        return -1;
+    }
+
+    /* Step B: invalidate icache for IBUS window so instruction fetches reload */
+    void *ibus_arena = dbus_to_ibus(s_exec_arena);
+    err = esp_cache_msync(ibus_arena, sync_size,
+                          ESP_CACHE_MSYNC_FLAG_DIR_M2C |
+                          ESP_CACHE_MSYNC_FLAG_INVALIDATE |
+                          ESP_CACHE_MSYNC_FLAG_TYPE_INST);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_cache_msync (M2C inst) failed: %s", esp_err_to_name(err));
         return -1;
     }
 
@@ -112,6 +138,15 @@ int mos_loader_exec(const char *path, int argc, char **argv)
     mos_entry_t entry = (mos_entry_t)ibus_entry;
     ESP_LOGI(TAG, "dbus @ %p  ibus @ %p", s_exec_arena, ibus_entry);
     ESP_LOGI(TAG, "Jumping to entry @ %p", entry);
+
+    /* Diagnostic: dump first bytes via DBUS and via the literal pool offset.
+     * arena[0x00..0x02] should be the 'j _start' trampoline: 06 08 00
+     * arena[0x8c..0x90] should be "Hell" (0x48 65 6c 6c) */
+    const uint8_t *d = s_exec_arena;
+    ESP_LOGI(TAG, "arena[0x00]: %02x %02x %02x  (expect 06 08 00 = j _start)",
+             d[0], d[1], d[2]);
+    ESP_LOGI(TAG, "arena[0x8c]: %02x %02x %02x %02x  (expect 48 65 6c 6c = 'Hell')",
+             d[0x8c], d[0x8d], d[0x8e], d[0x8f]);
 
     int ret = entry(argc, argv, mos_api_table_get());
 

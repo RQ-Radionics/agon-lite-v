@@ -51,20 +51,22 @@ SECTIONS {
     } > IBUS
 
     _ibus_end = .;
+    _dbus_data_start = _ibus_end - BUS_OFFSET;
 
     /* ── Data bus: rodata + data (same physical bytes, DBUS VMA) ───────────── */
-    /* LMA = IBUS address of the same bytes (flat binary: contiguous after .text).
-     * VMA = DBUS alias so byte loads (l8ui) work. */
-    .rodata : AT(_ibus_end) {
+    /* Use explicit "VMA : AT(LMA)" form — the "> REGION" form resets VMA to
+     * the region origin and ignores the current location counter. */
+
+    .rodata _dbus_data_start : AT(_ibus_end) {
         _dbus_start = .;
         *(.rodata*)
         *(.rodata)
-    } > DBUS
+    }
 
     . = ALIGN(4);
     .data : {
         *(.data*)
-    } > DBUS
+    }
 
     . = ALIGN(4);
     .bss (NOLOAD) : {
@@ -72,7 +74,7 @@ SECTIONS {
         *(.bss*)
         *(COMMON)
         __bss_end = .;
-    } > DBUS
+    }
 
     /DISCARD/ : { *(.comment) *(.note*) *(.ARM*) }
 }

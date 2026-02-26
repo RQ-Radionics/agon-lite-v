@@ -313,9 +313,15 @@ void mos_vdp_putch(uint8_t c)
     int fd = s_client_fd;
     xSemaphoreGive(s_sock_mu);
 
-    if (fd < 0) return;
+    if (fd < 0) {
+        ESP_LOGD(TAG, "putch 0x%02x dropped (no client)", c);
+        return;
+    }
     /* Blocking send — MSG_DONTWAIT silently drops bytes when TCP buffer is full */
-    send(fd, &c, 1, 0);
+    int r = send(fd, &c, 1, 0);
+    if (r < 0) {
+        ESP_LOGW(TAG, "putch 0x%02x send() failed: %d", c, errno);
+    }
 }
 
 int mos_vdp_getch(void)

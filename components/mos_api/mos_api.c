@@ -23,6 +23,9 @@
 #include "mos_editor.h"
 #include "mos_version.h"
 #include "mos_types.h"
+#include "esp_log.h"
+
+static const char *TAG = "mos_api";
 
 /* -------------------------------------------------------------------------
  * File handle table
@@ -96,6 +99,10 @@ void mos_api_putch(uint8_t c)
 
 void mos_api_puts(const char *s)
 {
+    const uint8_t *b = (const uint8_t *)s;
+    ESP_LOGI(TAG, "mos_api_puts ptr=%p bytes=[%02x %02x %02x %02x %02x]",
+             s, b ? b[0] : 0, b ? b[1] : 0, b ? b[2] : 0,
+             b ? b[3] : 0, b ? b[4] : 0);
     mos_puts(s);
 }
 

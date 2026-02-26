@@ -83,10 +83,11 @@ $(SDK_DIR)%.elf: $(SDK_DIR)%.c $(SDK_DIR)mos_user.ld $(COMMON_OBJS)
 	$(CC) $(CFLAGS) $(LDFLAGS) -Wl,-Map,$(SDK_DIR)$*.map \
 	    -o $@ $(COMMON_OBJS) $<
 
-# ELF → binario plano
+# ELF → binario plano, and copy to data/ for flash_data.sh
 $(SDK_DIR)%.bin: $(SDK_DIR)%.elf
 	$(OBJCOPY) -O binary $< $@
 	@echo "  → $@ ($$(wc -c < $@) bytes)"
+	@cp $@ $(SDK_DIR)../data/$*.bin && echo "  → ../data/$*.bin (copied)"
 
 # Desensamblar para depuración
 disasm: $(patsubst $(SDK_DIR)%.c,$(SDK_DIR)%.elf,$(SRCS))
