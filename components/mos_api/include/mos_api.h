@@ -21,6 +21,7 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include "mos_types.h"
+#include "mos_api_table.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -142,6 +143,18 @@ const char *mos_api_version(void);
 
 /** Return MOS variant string (e.g. "ESP32-S3"). */
 const char *mos_api_variant(void);
+
+/**
+ * Initialise the jump table.
+ * Must be called once from app_main before launching any user programs.
+ */
+void mos_api_table_init(void);
+
+/**
+ * Return pointer to the MOS API jump table.
+ * The loader passes this pointer as the third argument to the user entry point.
+ */
+t_mos_api *mos_api_table_get(void);
 
 #ifdef __cplusplus
 }

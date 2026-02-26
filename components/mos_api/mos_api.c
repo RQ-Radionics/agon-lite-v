@@ -336,3 +336,59 @@ const char *mos_api_variant(void)
 {
     return VERSION_VARIANT;
 }
+
+/* =========================================================================
+ * Jump table — allocated once, pointer passed to user programs as arg
+ * ========================================================================= */
+
+static t_mos_api s_mos_api_table;
+
+t_mos_api *mos_api_table_get(void)
+{
+    return &s_mos_api_table;
+}
+
+void mos_api_table_init(void)
+{
+    t_mos_api *t = &s_mos_api_table;
+
+    t->magic      = MOS_API_MAGIC;
+    t->version    = MOS_API_VERSION;
+
+    t->getkey     = mos_api_getkey;
+    t->putch      = mos_api_putch;
+    t->puts       = mos_api_puts;
+    t->editline   = mos_api_editline;
+
+    t->fopen      = mos_api_fopen;
+    t->fclose     = mos_api_fclose;
+    t->fgetc      = mos_api_fgetc;
+    t->fputc      = mos_api_fputc;
+    t->feof       = mos_api_feof;
+    t->flseek     = mos_api_flseek;
+    t->fread      = mos_api_fread;
+    t->fwrite     = mos_api_fwrite;
+    t->ftell      = mos_api_ftell;
+
+    t->dir        = mos_api_dir;
+    t->cd         = mos_api_cd;
+    t->mkdir      = mos_api_mkdir;
+    t->rename     = mos_api_rename;
+    t->copy       = mos_api_copy;
+    t->del        = mos_api_del;
+
+    t->setvariable = mos_api_setvariable;
+    t->getvariable = mos_api_getvariable;
+
+    t->oscli      = mos_api_oscli;
+
+    t->getrtc     = mos_api_getrtc;
+    t->setrtc     = mos_api_setrtc;
+
+    t->malloc     = malloc;
+    t->free       = free;
+
+    t->mos_version = mos_api_version;
+    t->mos_variant = mos_api_variant;
+    t->geterror   = mos_api_geterror;
+}

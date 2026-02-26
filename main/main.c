@@ -23,6 +23,7 @@
 #include "mos_fs.h"
 #include "mos_sysvars.h"
 #include "mos_shell.h"
+#include "mos_api.h"
 #include "mos_wifi.h"
 #include "mos_sntp.h"
 #include "mos_vdp.h"
@@ -86,7 +87,10 @@ void app_main(void)
         }
     }
 
-    /* 7. Shell init (variables, history) */
+    /* 7. MOS API jump table — must be ready before any RUN command */
+    mos_api_table_init();
+
+    /* 8. Shell init (variables, history) */
     mos_shell_init();
 
     /* 8. Welcome banner */

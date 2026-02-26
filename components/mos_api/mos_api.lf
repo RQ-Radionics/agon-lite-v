@@ -1,0 +1,4 @@
+[mapping:mos_api]
+archive: libmos_api.a
+entries:
+    mos_api (noflash)

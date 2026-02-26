@@ -32,6 +32,7 @@
 #include "mos_editor.h"
 #include "mos_types.h"
 #include "esp_heap_caps.h"
+#include "mos_loader.h"
 
 /* Shell-specific MATCH flags for command lookup */
 #define SHELL_MATCH_CMD  (MATCH_CASE_INSENSITIVE | MATCH_BEGINS_WITH | \
@@ -82,6 +83,7 @@ static int cmd_TRY(char *ptr);
 static int cmd_TYPE(char *ptr);
 static int cmd_UNSET(char *ptr);
 static int cmd_HELLOWORLD(char *ptr);
+static int cmd_RUN(char *ptr);
 
 /* -------------------------------------------------------------------------
  * Command table (order matters for abbreviation matching)
@@ -124,6 +126,7 @@ static t_mosCommand s_commands[] = {
     { "Type",       cmd_TYPE,       true,  "<file>",               "Display file contents" },
     { "Unset",      cmd_UNSET,      false, "<var>",                "Delete system variable" },
     { "HELLOWORLD", cmd_HELLOWORLD, false, NULL,                   "Write hello to flash (test)" },
+    { "Run",        cmd_RUN,        true,  "<file> [args]",         "Load and run a binary from filesystem" },
     { NULL, NULL, false, NULL, NULL }
 };
 
@@ -1217,6 +1220,43 @@ static int cmd_UNSET(char *ptr)
             removeSystemVariable(var);
             var = NULL;
         }
+    }
+    return FR_OK;
+}
+
+/* -------------------------------------------------------------------------
+ * CMD: RUN — load and execute a flat binary from filesystem
+ * ------------------------------------------------------------------------- */
+static int cmd_RUN(char *ptr)
+{
+    char *filename;
+    int result = extractString(ptr, &ptr, NULL, &filename, EXTRACT_FLAG_AUTO_TERMINATE);
+    if (result != FR_OK) {
+        mos_printf("Usage: RUN <file> [args]\r\n");
+        return result;
+    }
+
+    /* Build argv: argv[0] = filename, rest from remaining ptr */
+    #define RUN_MAX_ARGS 16
+    char *argv[RUN_MAX_ARGS];
+    int   argc = 0;
+    argv[argc++] = filename;
+
+    /* Tokenise remaining arguments */
+    char *arg;
+    while (argc < RUN_MAX_ARGS - 1) {
+        if (extractString(ptr, &ptr, NULL, &arg, EXTRACT_FLAG_AUTO_TERMINATE) != FR_OK) break;
+        argv[argc++] = arg;
+    }
+    argv[argc] = NULL;
+
+    int ret = mos_loader_exec(filename, argc, argv);
+    if (ret < 0) {
+        mos_printf("RUN: failed to load '%s'\r\n", filename);
+        return FR_INT_ERR;
+    }
+    if (ret != 0) {
+        mos_printf("RUN: program exited with code %d\r\n", ret);
     }
     return FR_OK;
 }
