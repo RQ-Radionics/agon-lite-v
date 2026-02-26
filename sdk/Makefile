@@ -52,12 +52,20 @@ ASFLAGS = \
     -mlongcalls \
     -nostdlib
 
+# libgcc provides software float routines (__divsf3, __mulsf3, etc.)
+# It has no OS dependencies so safe to link into freestanding programs.
+LIBGCC_DIR := $(dir $(shell $(CC) $(DYNCONFIG_FLAG) -print-libgcc-file-name))
+
 LDFLAGS = \
     -T$(SDK_DIR)mos_user.ld \
     -DMOS_EXEC_BASE=$(MOS_EXEC_BASE) \
     -DMOS_DBUS_BASE=$(MOS_DBUS_BASE) \
     -nostdlib \
     -Wl,--gc-sections
+
+# libgcc must come after object files on the link line (GNU ld resolves
+# undefined symbols left-to-right). Appended in the link rule below.
+LIBGCC_FLAGS = -L$(LIBGCC_DIR) -lgcc
 
 # ── Shared objects (linked into every program) ────────────────────────────────
 COMMON_SRCS := $(SDK_DIR)mos_vector.S
@@ -79,9 +87,10 @@ $(SDK_DIR)mos_vector.o: $(SDK_DIR)mos_vector.S
 	$(AS) $(ASFLAGS) -c -o $@ $<
 
 # Compilar .c → .elf  (mos_vector.o linked first so .text.vector is at offset 0)
+# libgcc appended last so undefined refs from .c are resolved against it.
 $(SDK_DIR)%.elf: $(SDK_DIR)%.c $(SDK_DIR)mos_user.ld $(COMMON_OBJS)
 	$(CC) $(CFLAGS) $(LDFLAGS) -Wl,-Map,$(SDK_DIR)$*.map \
-	    -o $@ $(COMMON_OBJS) $<
+	    -o $@ $(COMMON_OBJS) $< $(LIBGCC_FLAGS)
 
 # ELF → binario plano, and copy to data/ for flash_data.sh
 $(SDK_DIR)%.bin: $(SDK_DIR)%.elf
