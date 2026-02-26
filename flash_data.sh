@@ -9,7 +9,9 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 DATA_DIR="${SCRIPT_DIR}/data"
+FAT_RAW="${SCRIPT_DIR}/build/fat_raw.bin"
 IMAGE="${SCRIPT_DIR}/build/storage.bin"
+WL_WRAP="${SCRIPT_DIR}/wl_wrap.py"
 
 # Partition storage: offset 0x210000, size 4MB
 PARTITION_OFFSET=0x210000
@@ -43,6 +45,11 @@ if [ ! -f "${FATFSGEN}" ]; then
     exit 1
 fi
 
+if [ ! -f "${WL_WRAP}" ]; then
+    echo "ERROR: wl_wrap.py not found at ${WL_WRAP}"
+    exit 1
+fi
+
 if ! command -v esptool.py &>/dev/null; then
     echo "ERROR: esptool.py not found. Activate IDF environment first:"
     echo "  source /Users/rampa/esp/esp-idf/export.sh"
@@ -51,16 +58,21 @@ fi
 
 mkdir -p "${SCRIPT_DIR}/build"
 
-# ---- build FAT image ----
-# --wl_mode perf: must match esp_vfs_fat_spiflash_mount_rw_wl() which uses wear levelling
-echo "Building FAT image from ${DATA_DIR} ..."
+# ---- step 1: build raw FAT image (no --wl_mode) ----
+# fatfsgen.py --wl_mode does NOT generate the WL state/config blocks that the
+# C wear_levelling driver expects. We generate a plain FAT image and then inject
+# the correct WL blocks with wl_wrap.py.
+echo "Building raw FAT image from ${DATA_DIR} ..."
 "${PYTHON}" "${FATFSGEN}" \
-    --output_file "${IMAGE}" \
+    --output_file "${FAT_RAW}" \
     --partition_size ${PARTITION_SIZE} \
     --sector_size 512 \
     --long_name_support \
-    --wl_mode perf \
     "${DATA_DIR}"
+
+# ---- step 2: inject WL state/config blocks ----
+echo "Injecting wear-levelling blocks ..."
+python3 "${WL_WRAP}" "${FAT_RAW}" "${IMAGE}" ${PARTITION_OFFSET} ${PARTITION_SIZE}
 
 echo "Image: ${IMAGE} ($(wc -c < "${IMAGE}") bytes)"
 

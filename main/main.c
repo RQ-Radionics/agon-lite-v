@@ -61,6 +61,12 @@ static const char *TAG = "esp32-mos";
 
 #define VDU_CLS      "\x0c"            /* VDU 12 — clear screen             */
 #define VDU_HOME     "\x1e"            /* VDU 30 — cursor home              */
+/* VDU 22 = set screen mode: 2 bytes (0x16, mode_number).
+ * VDU 22,0 = 640x480 16-colour mode (defaultPalette10: indices 0..15).
+ * The VDP client (agon-sdl) starts in Mode 1 (4 colours), which maps
+ * colour indices mod 4, breaking all our cyan/yellow selections.
+ * Cannot embed 0x00 in a C string literal (string terminates), so the
+ * mode switch is sent via explicit mos_putch calls in print_banner().     */
 
 static void print_banner(void)
 {
@@ -72,6 +78,13 @@ static void print_banner(void)
     const char *wifi_s  = mos_wifi_is_connected()? COL_GREEN "OK"   COL_BWHITE
                                                   : COL_RED   "FAIL" COL_BWHITE;
 
+    /* Switch to 16-colour mode (VDU 22, 0).
+     * Cannot embed 0x00 in a string literal so send the two bytes manually.
+     * VDP starts in Mode 1 (4 colours); colour indices are taken mod 4,
+     * which remaps cyan→yellow and breaks all our colour selections.
+     * Mode 0 = 640×480 16-colour; defaultPalette10 maps indices 0–15 as
+     * standard CGA: 0=black 1=darkred … 8=darkgray 9=brightred … 14=cyan 15=white */
+    mos_putch(0x16); mos_putch(0x00);   /* VDU 22, 0 — set mode 0           */
     /* Reset colours, clear screen, cursor home */
     mos_puts(BG_BLACK COL_BWHITE VDU_CLS VDU_HOME);
 

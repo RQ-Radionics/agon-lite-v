@@ -36,8 +36,15 @@ int mos_fs_mount_flash(void)
         return 0;
     }
 
+    /* Mount with wear levelling (read-write).
+     * flash_data.sh uses wl_wrap.py to inject valid WL state/config blocks
+     * into the FAT image before flashing, so the WL driver finds them and
+     * does NOT reformat the partition.
+     * format_if_mount_failed = false: if blocks are missing/corrupt, fail
+     * loudly instead of silently erasing our files.
+     */
     esp_vfs_fat_mount_config_t mount_cfg = {
-        .format_if_mount_failed = true,   /* auto-format on first boot */
+        .format_if_mount_failed = false,
         .max_files              = 8,
         .allocation_unit_size   = 512,
     };
@@ -55,7 +62,7 @@ int mos_fs_mount_flash(void)
     }
 
     s_flash_mounted = true;
-    ESP_LOGI(TAG, "Flash FAT mounted at %s", MOS_FLASH_MOUNT);
+    ESP_LOGI(TAG, "Flash FAT mounted (rw) at %s", MOS_FLASH_MOUNT);
     return 0;
 }
 

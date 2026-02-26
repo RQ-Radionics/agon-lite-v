@@ -11,8 +11,9 @@ CONFIG_ESPTOOLPY_FLASHSIZE="8MB"
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 
-# FAT filesystem - must match fatfsgen.py parameters in flash_data.sh
-# Sector size 512, WL mode perf, LFN enabled (heap)
+# FAT filesystem + Wear Levelling
+# flash_data.sh generates a raw FAT image (fatfsgen.py) and then injects
+# WL state/config blocks (wl_wrap.py) to match these settings exactly.
 CONFIG_FATFS_SECTOR_512=y
 CONFIG_FATFS_LFN_HEAP=y
 CONFIG_FATFS_MAX_LFN=255
