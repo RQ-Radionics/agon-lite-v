@@ -84,6 +84,22 @@ _dbus_data_start = _ibus_end - BUS_OFFSET;   /* DBUS alias of where code ends */
 
 Do NOT use `> DBUS` for data sections — it overrides the explicit VMA.
 
+## BBC BASIC Heap Init — CRITICAL (commit 8e9164c)
+
+`malloc()` on ESP32/FreeRTOS does **NOT** zero memory. BBC BASIC's `clear()` calls
+`gettop()` on `progRAM` to find the end of the (empty) program. If `progRAM` has
+garbage bytes, `gettop()` returns NULL → prints "Bad program" → calls `error(256)`
+which longjmps back to `basic()`, **skipping** the `pfree = lomem + 4*fastvars`
+assignment. `pfree` stays 0. Next variable access (`putvar`) dereferences `pfree`
+(= 0) → StoreProhibited at 0x00000000.
+
+**Fix in `bbcbasic/src/bbccon_esp32.c`:**
+```c
+/* Zero the heap so progRAM starts as a valid empty BBC BASIC program */
+memset(userRAM, 0, (size_t) ram_size);
+```
+Must be done right after `malloc()`, before setting up workspace pointers.
+
 ## Current State (session end 2026-02-26)
 
 ### Fully working ✅
@@ -91,13 +107,16 @@ Do NOT use `> DBUS` for data sections — it overrides the explicit VMA.
 - FAT mount with write (`wl_wrap.py`)
 - PSRAM enabled
 - Shell: external commands without `RUN` or `.bin` extension
-- Loader: fixed arena, two-step cache sync, IBUS jump
+- Loader: fixed arena, two-step cache sync, IBUS jump, Xtensa magic byte check
 - SDK: `mos_vector.S` trampoline, correct IBUS/DBUS split linker script, little-endian
 - **`helloworld` executes, prints to VDP, writes file — full API chain confirmed**
+- **`bbcbasic` heap zero fix applied** — no more StoreProhibited crash; launches without serial crash output (VDP output not yet confirmed visually)
 
 ### Next areas to work on
+- Confirm BBC BASIC works interactively on VDP (type PRINT PI, A=1, etc.)
 - More shell commands (TYPE, DEL, RENAME, COPY, CD, MKDIR)
 - XMODEM receive for uploading binaries over serial
 - More user SDK examples
 - I2C driver (issue esp32-mos-h4x)
+- Sprites: investigate why sprites don't appear despite correct VDP sequence
 
