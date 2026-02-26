@@ -126,10 +126,13 @@ def make_state(flash_size):
     # wl_part_max_sec_pos = 1 + flash_size / page_size
     wl_part_max_sec_pos = 1 + flash_size // page_size
 
-    # wl_dummy_sec_pos = 1 (NOT 0):
-    #   calcAddr(0) with pos=0: result=0 >= dummy=0 → offset += page → BPB not at 0!
-    #   calcAddr(0) with pos=1: result=0  < dummy=page → no shift   → BPB at offset 0 ✓
-    wl_dummy_sec_pos = 1
+    # wl_dummy_sec_pos = 0.
+    # recoverPos() scans the pos_update records (all 0xFF in a fresh image) and
+    # always lands at position=0 because OkBuffSet() returns false on 0xFF bytes.
+    # So pos is always 0 at runtime regardless of what we store — don't fight it.
+    # Instead the FAT image is shifted by one page (4096 bytes) in wl_wrap main(),
+    # so the BPB sits at physical offset 4096 = calcAddr(logical 0) with pos=0.
+    wl_dummy_sec_pos = 0
 
     device_id = random.randint(0, 0xFFFFFFFF)
 
@@ -162,13 +165,25 @@ def main():
     part_size   = int(sys.argv[4], 0)
 
     with open(input_file, 'rb') as f:
-        data = bytearray(f.read())
+        fat_raw = bytearray(f.read())
 
-    if len(data) != part_size:
-        print(f"ERROR: input size {len(data)} != partition_size {part_size}")
+    if len(fat_raw) != part_size:
+        print(f"ERROR: input size {len(fat_raw)} != partition_size {part_size}")
         sys.exit(1)
 
     cfg_size, state_size, rel_s1, rel_s2, rel_cfg, flash_size = compute_layout(part_start, part_size)
+
+    # recoverPos() always sets wl_dummy_sec_pos=0 on a fresh image (all pos_update
+    # records are 0xFF → OkBuffSet returns false at i=0 → position=0).
+    # With pos=0: calcAddr(logical=0) = 0 + page = 4096 (physical).
+    # So the FAT BPB must be at physical offset FLASH_ERASE_SIZE (4096), not 0.
+    # We shift the entire FAT image forward by one page: physical[0..4095] = dummy (0xFF),
+    # physical[4096..] = FAT data. The last page of FAT data is lost — but flash_size
+    # already excludes one dummy page, so the usable FAT area fits exactly.
+    DUMMY = FLASH_ERASE_SIZE
+    data = bytearray(b'\xff' * part_size)
+    data[DUMMY : DUMMY + len(fat_raw) - DUMMY] = fat_raw[:-DUMMY]
+    print(f"  FAT shifted by 0x{DUMMY:x} bytes (dummy page at offset 0)")
 
     print(f"WL layout (flash_erase_size={FLASH_ERASE_SIZE}, fat_sector={FAT_SECTOR_SIZE}):")
     print(f"  partition:   start=0x{part_start:08x}  size=0x{part_size:08x}")
@@ -193,14 +208,15 @@ def main():
     cfg_raw   = make_cfg(part_start, part_size, flash_size)
     state_raw = make_state(flash_size)
 
-    # Verify calcAddr(0) gives physical offset 0
+    # Verify calcAddr(0) points to FLASH_ERASE_SIZE (where BPB now lives)
     state = struct.unpack(STATE_STRUCT_FMT, state_raw)
-    pos   = state[0]
+    pos   = state[0]   # 0 — recoverPos always lands here
     page  = FLASH_ERASE_SIZE
     r     = (flash_size + 0) % flash_size
     if r >= pos * page:
         r += page
-    print(f"  calcAddr(0): pos={pos} → physical offset 0x{r:x} ({'OK' if r == 0 else 'WRONG!'})")
+    want = FLASH_ERASE_SIZE
+    print(f"  calcAddr(0): pos={pos} → physical 0x{r:x} ({'OK' if r == want else 'WRONG — want 0x%x' % want})")
 
     def write_block(rel_off, src, size):
         data[rel_off : rel_off + size] = b'\xff' * size
