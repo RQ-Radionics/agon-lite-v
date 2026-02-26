@@ -15,6 +15,20 @@ IMAGE="${SCRIPT_DIR}/build/storage.bin"
 PARTITION_OFFSET=0x210000
 PARTITION_SIZE=$((4 * 1024 * 1024))
 
+IDF_ROOT="${IDF_PATH:-/Users/rampa/esp/esp-idf}"
+FATFSGEN="${IDF_ROOT}/components/fatfs/fatfsgen.py"
+
+# Use IDF's own Python (has 'construct' and other required modules)
+IDF_PYTHON="${IDF_PYTHON_ENV_PATH:-}"
+if [ -z "${IDF_PYTHON}" ]; then
+    # Try to find it under ~/.espressif/python_env
+    IDF_PYTHON=$(ls -d ~/.espressif/python_env/idf5.5_py*_env 2>/dev/null | tail -1)
+fi
+PYTHON="${IDF_PYTHON}/bin/python"
+if [ ! -x "${PYTHON}" ]; then
+    PYTHON="python3"
+fi
+
 PORT="${1:-${ESPPORT:-/dev/cu.usbserial-0001}}"
 
 # ---- sanity checks ----
@@ -23,15 +37,23 @@ if [ ! -d "${DATA_DIR}" ]; then
     exit 1
 fi
 
-if ! command -v fatfsgen.py &>/dev/null; then
-    echo "ERROR: fatfsgen.py not found. Activate IDF environment first:"
+if [ ! -f "${FATFSGEN}" ]; then
+    echo "ERROR: fatfsgen.py not found at ${FATFSGEN}"
+    echo "  Set IDF_PATH or edit this script"
+    exit 1
+fi
+
+if ! command -v esptool.py &>/dev/null; then
+    echo "ERROR: esptool.py not found. Activate IDF environment first:"
     echo "  source /Users/rampa/esp/esp-idf/export.sh"
     exit 1
 fi
 
+mkdir -p "${SCRIPT_DIR}/build"
+
 # ---- build FAT image ----
 echo "Building FAT image from ${DATA_DIR} ..."
-fatfsgen.py \
+"${PYTHON}" "${FATFSGEN}" \
     --output_file "${IMAGE}" \
     --partition_size ${PARTITION_SIZE} \
     --long_name_support \
