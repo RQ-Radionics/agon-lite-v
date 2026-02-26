@@ -161,6 +161,25 @@ const char *mos_fs_getcwd(void) { return s_cwd; }
 /* Path resolution                                                      */
 /* ------------------------------------------------------------------ */
 
+/* Strip trailing "/." and trailing "/" (except root) from a resolved path */
+static void path_normalise(char *p)
+{
+    size_t len = strlen(p);
+    /* Remove trailing "/." */
+    while (len >= 2 && p[len-2] == '/' && p[len-1] == '.') {
+        p[len-2] = '\0';
+        len -= 2;
+    }
+    /* Remove trailing "/" unless it IS the root */
+    while (len > 1 && p[len-1] == '/') {
+        p[--len] = '\0';
+    }
+    /* If we stripped everything, use mount root */
+    if (len == 0) {
+        strcpy(p, "/");
+    }
+}
+
 int mos_fs_resolve(const char *path, char *out_buf, size_t out_size)
 {
     if (!path || !out_buf || out_size == 0) return -1;
@@ -179,13 +198,26 @@ int mos_fs_resolve(const char *path, char *out_buf, size_t out_size)
         }
         /* Skip leading slash if present */
         if (*rest == '/') rest++;
-        snprintf(out_buf, out_size, "%s/%s", mount, rest);
+        if (*rest == '\0') {
+            snprintf(out_buf, out_size, "%s", mount);
+        } else {
+            snprintf(out_buf, out_size, "%s/%s", mount, rest);
+        }
+        path_normalise(out_buf);
         return 0;
     }
 
     /* Absolute VFS path */
     if (path[0] == '/') {
         snprintf(out_buf, out_size, "%s", path);
+        path_normalise(out_buf);
+        return 0;
+    }
+
+    /* "." means current directory */
+    if (strcmp(path, ".") == 0) {
+        snprintf(out_buf, out_size, "%s", s_cwd);
+        path_normalise(out_buf);
         return 0;
     }
 
@@ -195,6 +227,7 @@ int mos_fs_resolve(const char *path, char *out_buf, size_t out_size)
     } else {
         snprintf(out_buf, out_size, "%s/%s", s_cwd, path);
     }
+    path_normalise(out_buf);
     return 0;
 }
 

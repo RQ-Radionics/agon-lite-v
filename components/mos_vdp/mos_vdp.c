@@ -299,7 +299,8 @@ void mos_vdp_putch(uint8_t c)
     xSemaphoreGive(s_sock_mu);
 
     if (fd < 0) return;
-    send(fd, &c, 1, MSG_DONTWAIT);
+    /* Blocking send — MSG_DONTWAIT silently drops bytes when TCP buffer is full */
+    send(fd, &c, 1, 0);
 }
 
 int mos_vdp_getch(void)

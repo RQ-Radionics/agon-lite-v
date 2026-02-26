@@ -30,6 +30,7 @@ typedef enum {
  */
 #define FR_OK               0
 #define FR_INT_ERR          2
+#define FR_NOT_READY        3
 #define FR_NO_FILE          4
 #define FR_NO_PATH          5
 #define FR_INVALID_NAME     6

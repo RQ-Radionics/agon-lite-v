@@ -302,6 +302,30 @@ int mos_exec(char *buffer)
     if (!command) return MOS_OUT_OF_MEMORY;
     snprintf(command, (size_t)(cmdLen + 1), "%.*s", cmdLen, commandPtr);
 
+    /* Drive change: "A:" or "B:" (case-insensitive, no args) */
+    if (cmdLen == 2 && command[1] == ':') {
+        char drive = command[0];
+        char resolved[MOS_PATH_MAX];
+        int r;
+        if (drive == MOS_DRIVE_FLASH || drive == 'a') {
+            if (!mos_fs_flash_mounted()) {
+                mos_printf("Drive A: not available\r\n");
+                free(command); return FR_NOT_READY;
+            }
+            mos_fs_resolve("A:", resolved, sizeof(resolved));
+            r = mos_fs_chdir(resolved);
+            free(command); return r;
+        } else if (drive == MOS_DRIVE_SD || drive == 'b') {
+            if (!mos_fs_sd_mounted()) {
+                mos_printf("Drive B: not available\r\n");
+                free(command); return FR_NOT_READY;
+            }
+            mos_fs_resolve("B:", resolved, sizeof(resolved));
+            r = mos_fs_chdir(resolved);
+            free(command); return r;
+        }
+    }
+
     t_mosCommand *cmd = mos_getCommand(command);
     free(command);
 
