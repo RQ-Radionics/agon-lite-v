@@ -84,6 +84,13 @@ typedef struct {
     const char *(*mos_variant)(void);
     const char *(*geterror)(int err);
 
+    /* --- timing --- */
+    void     (*delay_ms)(uint32_t ms);   /* yield-friendly delay (vTaskDelay) */
+    uint32_t (*get_ticks_ms)(void);      /* milliseconds since boot */
+
+    /* --- non-blocking input check --- */
+    int      (*kbhit)(void);             /* non-zero if a key is available */
+
 } t_mos_api;
 
 #endif /* MOS_API_TABLE_H */

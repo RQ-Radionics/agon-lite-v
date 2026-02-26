@@ -82,11 +82,10 @@ static void sound(uint8_t channel, uint8_t volume, uint16_t freq, uint16_t dur_m
     vdu((uint8_t)(dur_ms >> 8));    /* duration hi */
 }
 
-/* Calibrated busy-wait: ESP32-S3 @ 240MHz, ~60000 iterations/ms */
+/* Yield-friendly delay via MOS API (uses vTaskDelay internally) */
 static void wait_ms(uint32_t ms)
 {
-    volatile uint32_t count = ms * 60000u;
-    while (count--) { /* spin */ }
+    g_mos->delay_ms(ms);
 }
 
 /* DATA from BBC BASIC: pairs of (pitch, duration_in_20ths_of_second)

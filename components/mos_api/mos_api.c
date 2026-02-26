@@ -24,6 +24,9 @@
 #include "mos_version.h"
 #include "mos_types.h"
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "esp_timer.h"
 
 static const char *TAG = "mos_api";
 
@@ -339,6 +342,26 @@ const char *mos_api_version(void)
     return VERSION_STRING;
 }
 
+/* =========================================================================
+ * Timing
+ * ========================================================================= */
+
+void mos_api_delay_ms(uint32_t ms)
+{
+    if (ms == 0) return;
+    vTaskDelay(pdMS_TO_TICKS(ms));
+}
+
+uint32_t mos_api_get_ticks_ms(void)
+{
+    return (uint32_t)(esp_timer_get_time() / 1000ULL);
+}
+
+int mos_api_kbhit(void)
+{
+    return mos_kbhit() ? 1 : 0;
+}
+
 const char *mos_api_variant(void)
 {
     return VERSION_VARIANT;
@@ -398,4 +421,9 @@ void mos_api_table_init(void)
     t->mos_version = mos_api_version;
     t->mos_variant = mos_api_variant;
     t->geterror   = mos_api_geterror;
+
+    t->delay_ms     = mos_api_delay_ms;
+    t->get_ticks_ms = mos_api_get_ticks_ms;
+
+    t->kbhit        = mos_api_kbhit;
 }

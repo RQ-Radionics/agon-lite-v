@@ -183,12 +183,8 @@ typedef struct {
 
 static Sprite s_sprites[NUM_SPRITES];
 
-/* ── Busy-wait delay ────────────────────────────────────────────────────── */
-static void wait_ms(uint32_t ms)
-{
-    volatile uint32_t n = ms * 60000u;
-    while (n--) { /* spin */ }
-}
+/* Yield-friendly delay via MOS API */
+static void wait_ms(uint32_t ms) { g_mos->delay_ms(ms); }
 
 /* ── Entry point ─────────────────────────────────────────────────────────── */
 __attribute__((section(".text.entry")))
@@ -205,6 +201,9 @@ int _start(int argc, char **argv, t_mos_api *mos)
     /* Load both bitmaps */
     if (load_bitmap("A:/pacman1.rgb", BMP_OPEN)   < 0) return 1;
     if (load_bitmap("A:/pacman2.rgb", BMP_CLOSED) < 0) return 1;
+
+    /* Give VDP time to process the bitmap data before issuing sprite commands */
+    mos->delay_ms(200);
 
     /* Set up sprites: each gets both frames */
     for (int i = 0; i < NUM_SPRITES; i++) {
@@ -239,11 +238,11 @@ int _start(int argc, char **argv, t_mos_api *mos)
 
     mos->puts("Running - press a key to exit\r\n");
 
-    /* Main animation loop */
+    /* Main animation loop — use get_ticks_ms for frame pacing */
     uint32_t tick = 0;
     while (1) {
-        /* Check for keypress to exit */
-        if (mos->getkey()) break;
+        /* Non-blocking keypress check to exit */
+        if (mos->kbhit()) { mos->getkey(); break; }
 
         /* Move sprites, bounce off walls */
         for (int i = 0; i < NUM_SPRITES; i++) {
