@@ -104,6 +104,10 @@ static void vdp_server_task(void *arg)
         /* Drain any stale bytes from previous session */
         xQueueReset(s_rx_queue);
 
+        /* Send VDP_gp (0x80) handshake — signals MOS is ready */
+        uint8_t gp = 0x80;
+        send(fd, &gp, 1, MSG_DONTWAIT);
+
         /* Read loop — push bytes into RX queue */
         uint8_t byte;
         while (1) {
