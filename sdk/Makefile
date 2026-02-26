@@ -19,8 +19,9 @@ SDK_DIR  := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 INC_DIR  := $(SDK_DIR)../components/mos_api/include
 
 # ── Dirección de carga en PSRAM ──────────────────────────────────────────────
-# IBUS alias of the exec arena: s_exec_arena dbus=0x3C0E0000 → ibus=0x420E0000
-# Formula: ibus = (dbus - 0x3C000000) + 0x42000000
+# s_exec_arena DBUS (data window):        0x3C0E0000
+# s_exec_arena IBUS (instruction window): 0x420E0000  (= DBUS + 0x6000000)
+# Everything linked at IBUS; PMS disabled so l32r data reads from IBUS work.
 MOS_EXEC_BASE ?= 0x420E0000
 
 # ── Flags de compilación ─────────────────────────────────────────────────────
