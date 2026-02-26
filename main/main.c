@@ -64,26 +64,31 @@ static const char *TAG = "esp32-mos";
 
 static void print_banner(void)
 {
-    const char *flash_s = mos_fs_flash_mounted() ? COL_GREEN  "OK"   COL_BWHITE
-                                                  : COL_RED    "FAIL" COL_BWHITE;
-    const char *sd_s    = mos_fs_sd_mounted()    ? COL_GREEN  "OK"   COL_BWHITE
-                                                  : COL_WHITE  "N/A"  COL_BWHITE;
-    const char *wifi_s  = mos_wifi_is_connected()? COL_GREEN  "OK"   COL_BWHITE
-                                                  : COL_RED    "FAIL" COL_BWHITE;
+    /* All status values: green=OK, red=FAIL/error, white=N/A neutral */
+    const char *flash_s = mos_fs_flash_mounted() ? COL_GREEN "OK"   COL_BWHITE
+                                                  : COL_RED   "FAIL" COL_BWHITE;
+    const char *sd_s    = mos_fs_sd_mounted()    ? COL_GREEN "OK"   COL_BWHITE
+                                                  : COL_WHITE "N/A"  COL_BWHITE;
+    const char *wifi_s  = mos_wifi_is_connected()? COL_GREEN "OK"   COL_BWHITE
+                                                  : COL_RED   "FAIL" COL_BWHITE;
 
-    /* Reset to white-on-black, clear screen */
+    /* Reset colours, clear screen, cursor home */
     mos_puts(BG_BLACK COL_BWHITE VDU_CLS VDU_HOME);
 
-    mos_printf(COL_BCYAN  "  ********************************\r\n");
-    mos_printf(           "  *  " COL_BYELLOW "ESP32-MOS v" VERSION_STRING
-               "                " COL_BCYAN "*\r\n");
-    mos_printf(           "  *  " COL_BWHITE VERSION_VARIANT
-               "  \"" VERSION_SUBTITLE "\""
-               "        " COL_BCYAN "*\r\n");
-    mos_printf(           "  ********************************\r\n");
-    mos_printf(COL_BWHITE "\r\n");
+    /* Border = 34 visible chars: "  ********************************"          */
+    /* Line 2:  "  *  ESP32-MOS v3.0.1           *"  (11 spaces padding)       */
+    /* Line 3:  "  *  ESP32-S3  \"Arthur\"         *"  (9 spaces padding)      */
+    mos_puts(COL_BCYAN
+             "  ********************************\r\n"
+             "  *  " COL_BYELLOW "ESP32-MOS v" VERSION_STRING
+             "           " COL_BCYAN "*\r\n"
+             "  *  " COL_BWHITE  VERSION_VARIANT "  \"" VERSION_SUBTITLE "\""
+             "          " COL_BCYAN "*\r\n"
+             "  ********************************" COL_BWHITE "\r\n"
+             "\r\n");
+
     mos_printf("  Flash: %s   SD: %s   WiFi: %s\r\n", flash_s, sd_s, wifi_s);
-    mos_printf("  VDP port: %d\r\n", MOS_VDP_TCP_PORT);
+    mos_printf("  VDP port: " COL_GREEN "%d" COL_BWHITE "\r\n", MOS_VDP_TCP_PORT);
     mos_printf("\r\n");
     mos_printf(COL_YELLOW "  Type HELP for commands." COL_BWHITE "\r\n");
     mos_printf("\r\n");
