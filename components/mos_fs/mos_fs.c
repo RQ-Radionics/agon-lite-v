@@ -71,30 +71,42 @@ int mos_fs_mount_flash(void)
 /* ------------------------------------------------------------------ */
 
 /*
- * SPI GPIO defaults for ESP32-S3 — override via sdkconfig or Kconfig.
- *
- * GPIO 19/20 on ESP32-S3 are USB D-/D+ and must be avoided.
- * These are safe general-purpose pins on most ESP32-S3 DevKit boards.
+ * SPI GPIO defaults — override via sdkconfig or Kconfig.
  * Adjust to match your hardware before flashing.
  *
- *  Signal  GPIO  Notes
- *  ------  ----  -----
- *  MOSI     11   SPI2 default on ESP32-S3
- *  MISO     13   SPI2 default on ESP32-S3
- *  CLK      12   SPI2 default on ESP32-S3
- *  CS       10   Chip select
+ * ESP32-S3 DevKit:
+ *   MOSI=11, MISO=13, CLK=12, CS=10 (SPI2; GPIO 19/20 are USB D-/D+)
+ *
+ * ESP32-P4-Function-EV-Board:
+ *   MOSI=8, MISO=9, CLK=43, CS=44 (adjust per actual board)
  */
 #ifndef MOS_SD_PIN_MOSI
-#define MOS_SD_PIN_MOSI  11
+  #if CONFIG_IDF_TARGET_ESP32P4
+    #define MOS_SD_PIN_MOSI  8
+  #else
+    #define MOS_SD_PIN_MOSI  11
+  #endif
 #endif
 #ifndef MOS_SD_PIN_MISO
-#define MOS_SD_PIN_MISO  13
+  #if CONFIG_IDF_TARGET_ESP32P4
+    #define MOS_SD_PIN_MISO  9
+  #else
+    #define MOS_SD_PIN_MISO  13
+  #endif
 #endif
 #ifndef MOS_SD_PIN_CLK
-#define MOS_SD_PIN_CLK   12
+  #if CONFIG_IDF_TARGET_ESP32P4
+    #define MOS_SD_PIN_CLK   43
+  #else
+    #define MOS_SD_PIN_CLK   12
+  #endif
 #endif
 #ifndef MOS_SD_PIN_CS
-#define MOS_SD_PIN_CS    10
+  #if CONFIG_IDF_TARGET_ESP32P4
+    #define MOS_SD_PIN_CS    44
+  #else
+    #define MOS_SD_PIN_CS    10
+  #endif
 #endif
 #define MOS_SD_SPI_HOST  SPI2_HOST
 

@@ -1,43 +1,57 @@
 # Makefile para programas de usuario ESP32-MOS
 #
-# Prerequisito: toolchain Xtensa instalado via ESP-IDF
+# Prerequisito: toolchain instalado via ESP-IDF
 #   source ~/esp/esp-idf/export.sh
 #
 # Uso:
-#   make              → compila todos los .c en este directorio
-#   make helloworld   → compila solo helloworld.bin
+#   make                      → compila todos los .c (default: esp32s3)
+#   make TARGET=esp32p4       → compila para ESP32-P4 (RISC-V)
+#   make helloworld           → compila solo helloworld.bin
 #   make clean
 
-# ── Toolchain ────────────────────────────────────────────────────────────────
-CC      = xtensa-esp-elf-gcc
-AS      = xtensa-esp-elf-gcc
-OBJCOPY = xtensa-esp-elf-objcopy
-OBJDUMP = xtensa-esp-elf-objdump
+# ── Target selection ─────────────────────────────────────────────────────
+TARGET ?= esp32s3
 
-# xtensa-esp-elf-gcc defaults to big-endian without a dynconfig.
-# The ESP32-S3 config .so selects little-endian + correct ISA extensions.
-XTENSA_DYNCONFIG_SO := xtensa_esp32s3.so
-XTENSA_LIB_DIR      := $(dir $(shell which xtensa-esp-elf-gcc))../lib
-
-# ── Directorios ──────────────────────────────────────────────────────────────
+# ── Directorios ──────────────────────────────────────────────────────────
 SDK_DIR  := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 INC_DIR  := $(SDK_DIR)../components/mos_api/include
 
-# ── Dirección de carga en PSRAM ──────────────────────────────────────────────
-# s_exec_arena DBUS (data window):        0x3C0E0000
-# s_exec_arena IBUS (instruction window): 0x420E0000  (= DBUS + 0x6000000)
-# Code (text/literal) → IBUS VMA; rodata/data → DBUS VMA; same flat binary.
-MOS_EXEC_BASE ?= 0x420E0000
-MOS_DBUS_BASE ?= 0x3C0E0000
+# ── Toolchain & arch flags per target ────────────────────────────────────
+ifeq ($(TARGET),esp32p4)
+  # ESP32-P4: RISC-V RV32IMAFC
+  CC      = riscv32-esp-elf-gcc
+  AS      = riscv32-esp-elf-gcc
+  OBJCOPY = riscv32-esp-elf-objcopy
+  OBJDUMP = riscv32-esp-elf-objdump
+  ARCH_FLAGS = -march=rv32imafc -mabi=ilp32f
+  # ESP32-P4: unified PSRAM address space (DBUS == IBUS).
+  # s_exec_arena is at 0x48000000 (from build/esp32-mos.map .ext_ram.bss)
+  MOS_EXEC_BASE ?= 0x48000000
+  MOS_DBUS_BASE ?= 0x48000000
+  LIBGCC_DIR := $(dir $(shell $(CC) $(ARCH_FLAGS) -print-libgcc-file-name))
+  LIBC_DIR   := $(dir $(shell $(CC) $(ARCH_FLAGS) -print-file-name=libc.a))
+else
+  # ESP32-S3: Xtensa LX7 (default)
+  CC      = xtensa-esp-elf-gcc
+  AS      = xtensa-esp-elf-gcc
+  OBJCOPY = xtensa-esp-elf-objcopy
+  OBJDUMP = xtensa-esp-elf-objdump
+  XTENSA_DYNCONFIG_SO := xtensa_esp32s3.so
+  XTENSA_LIB_DIR      := $(dir $(shell which xtensa-esp-elf-gcc))../lib
+  ARCH_FLAGS = -mdynconfig=$(XTENSA_DYNCONFIG_SO) -mlongcalls -mtext-section-literals
+  # ESP32-S3: separate DBUS/IBUS windows
+  # s_exec_arena DBUS (data window):        0x3C0E0000
+  # s_exec_arena IBUS (instruction window): 0x420E0000  (= DBUS + 0x6000000)
+  MOS_EXEC_BASE ?= 0x420E0000
+  MOS_DBUS_BASE ?= 0x3C0E0000
+  LIBGCC_DIR := $(dir $(shell $(CC) -mdynconfig=$(XTENSA_DYNCONFIG_SO) -print-libgcc-file-name))
+  # Export DYLD_LIBRARY_PATH so the compiler can dlopen xtensa_esp32s3.so
+  export DYLD_LIBRARY_PATH := $(XTENSA_LIB_DIR)$(if $(DYLD_LIBRARY_PATH),:$(DYLD_LIBRARY_PATH))
+endif
 
-# ── Flags de compilación ─────────────────────────────────────────────────────
-# -mdynconfig selects little-endian + ESP32-S3 ISA (set via DYLD_LIBRARY_PATH)
-DYNCONFIG_FLAG = -mdynconfig=$(XTENSA_DYNCONFIG_SO)
-
+# ── Flags de compilación ─────────────────────────────────────────────────
 CFLAGS = \
-    $(DYNCONFIG_FLAG) \
-    -mlongcalls \
-    -mtext-section-literals \
+    $(ARCH_FLAGS) \
     -Os \
     -std=c11 \
     -nostdlib \
@@ -48,13 +62,8 @@ CFLAGS = \
     -I$(INC_DIR)
 
 ASFLAGS = \
-    $(DYNCONFIG_FLAG) \
-    -mlongcalls \
+    $(ARCH_FLAGS) \
     -nostdlib
-
-# libgcc provides software float routines (__divsf3, __mulsf3, etc.)
-# It has no OS dependencies so safe to link into freestanding programs.
-LIBGCC_DIR := $(dir $(shell $(CC) $(DYNCONFIG_FLAG) -print-libgcc-file-name))
 
 LDFLAGS = \
     -T$(SDK_DIR)mos_user.ld \
@@ -63,27 +72,30 @@ LDFLAGS = \
     -nostdlib \
     -Wl,--gc-sections
 
-# libgcc must come after object files on the link line (GNU ld resolves
-# undefined symbols left-to-right). Appended in the link rule below.
+# libgcc provides software float routines (__divsf3, __mulsf3, etc.)
+# libc provides memcpy/memset that RISC-V GCC emits implicitly for struct copies.
+# Both have no OS dependencies so safe to link into freestanding programs.
+ifeq ($(TARGET),esp32p4)
+LIBGCC_FLAGS = -L$(LIBGCC_DIR) -L$(LIBC_DIR) -lc -lgcc
+else
 LIBGCC_FLAGS = -L$(LIBGCC_DIR) -lgcc
+endif
 
-# ── Shared objects (linked into every program) ────────────────────────────────
+# ── Shared objects (linked into every program) ────────────────────────────
+# Use target-specific suffix to avoid cross-contamination when switching targets
 COMMON_SRCS := $(SDK_DIR)mos_vector.S
-COMMON_OBJS := $(SDK_DIR)mos_vector.o
+COMMON_OBJS := $(SDK_DIR)mos_vector.$(TARGET).o
 
-# ── Reglas ───────────────────────────────────────────────────────────────────
+# ── Reglas ───────────────────────────────────────────────────────────────
 SRCS    := $(wildcard $(SDK_DIR)*.c)
 BINS    := $(patsubst $(SDK_DIR)%.c,$(SDK_DIR)%.bin,$(SRCS))
-
-# Export DYLD_LIBRARY_PATH so the compiler can dlopen xtensa_esp32s3.so
-export DYLD_LIBRARY_PATH := $(XTENSA_LIB_DIR)$(if $(DYLD_LIBRARY_PATH),:$(DYLD_LIBRARY_PATH))
 
 .PHONY: all clean disasm
 
 all: $(BINS)
 
-# Compile common assembly
-$(SDK_DIR)mos_vector.o: $(SDK_DIR)mos_vector.S
+# Compile common assembly (target-specific .o to avoid cross-contamination)
+$(SDK_DIR)mos_vector.$(TARGET).o: $(SDK_DIR)mos_vector.S
 	$(AS) $(ASFLAGS) -c -o $@ $<
 
 # Compilar .c → .elf  (mos_vector.o linked first so .text.vector is at offset 0)
@@ -92,11 +104,12 @@ $(SDK_DIR)%.elf: $(SDK_DIR)%.c $(SDK_DIR)mos_user.ld $(COMMON_OBJS)
 	$(CC) $(CFLAGS) $(LDFLAGS) -Wl,-Map,$(SDK_DIR)$*.map \
 	    -o $@ $(COMMON_OBJS) $< $(LIBGCC_FLAGS)
 
-# ELF → binario plano, and copy to data/ for flash_data.sh
+# ELF → binario plano, and copy to data/<target>/ for flash_data.sh
 $(SDK_DIR)%.bin: $(SDK_DIR)%.elf
 	$(OBJCOPY) -O binary $< $@
 	@echo "  → $@ ($$(wc -c < $@) bytes)"
-	@cp $@ $(SDK_DIR)../data/$*.bin && echo "  → ../data/$*.bin (copied)"
+	@mkdir -p $(SDK_DIR)../data/$(TARGET)
+	@cp $@ $(SDK_DIR)../data/$(TARGET)/$*.bin && echo "  → ../data/$(TARGET)/$*.bin (copied)"
 
 # Desensamblar para depuración
 disasm: $(patsubst $(SDK_DIR)%.c,$(SDK_DIR)%.elf,$(SRCS))

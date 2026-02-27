@@ -1,0 +1,13 @@
+# ESP32-MOS — ESP32-S3 target-specific settings
+
+# Flash size 8MB
+CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="8MB"
+
+# PSRAM: Octal SPI, 80 MHz
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y
+
+# Disable memory protection: user programs run from PSRAM IBUS window (0x42...),
+# l32r reads literals from that same IBUS range as data — PMS blocks this by default.
+CONFIG_ESP_SYSTEM_MEMPROT_FEATURE=n

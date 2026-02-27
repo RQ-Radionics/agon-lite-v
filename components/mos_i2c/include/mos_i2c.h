@@ -47,10 +47,18 @@
 
 /* ── Default GPIO pins ─────────────────────────────────────────────────── */
 #ifndef MOS_I2C_SDA_GPIO
-#define MOS_I2C_SDA_GPIO  8
+  #if CONFIG_IDF_TARGET_ESP32P4
+    #define MOS_I2C_SDA_GPIO  6   /* ESP32-P4-Function-EV-Board */
+  #else
+    #define MOS_I2C_SDA_GPIO  8   /* ESP32-S3 DevKit */
+  #endif
 #endif
 #ifndef MOS_I2C_SCL_GPIO
-#define MOS_I2C_SCL_GPIO  9
+  #if CONFIG_IDF_TARGET_ESP32P4
+    #define MOS_I2C_SCL_GPIO  7   /* ESP32-P4-Function-EV-Board */
+  #else
+    #define MOS_I2C_SCL_GPIO  9   /* ESP32-S3 DevKit */
+  #endif
 #endif
 
 /* ── Optional: override GPIO pins before calling mos_I2C_OPEN() ────────── */

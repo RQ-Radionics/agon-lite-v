@@ -133,7 +133,8 @@ void app_main(void)
         ESP_LOGW(TAG, "SD card not available");
     }
 
-    /* 4. WiFi - wait up to 15 s for IP */
+    /* 4. WiFi - wait up to 15 s for IP
+     * On ESP32-P4 this uses esp_wifi_remote via ESP32-C6 coprocessor (SDIO) */
     mos_printf("Connecting to WiFi...\r\n");
     int wifi_ok = mos_wifi_init(15000);
     if (wifi_ok == 0) {

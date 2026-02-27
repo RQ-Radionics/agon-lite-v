@@ -1,16 +1,28 @@
 #!/usr/bin/env bash
 # flash_data.sh — Build a FAT image from data/ and flash it to the storage partition
-# Usage: ./flash_data.sh [PORT]
+# Usage: ./flash_data.sh [PORT] [CHIP]
 #   PORT defaults to /dev/cu.usbserial-0001 or set via $ESPPORT
+#   CHIP defaults to esp32s3 (also accepts esp32p4)
+#
+# The FAT image is built from:
+#   data/common/       — shared files (.bas, .bat, .rgb, etc.)
+#   data/<CHIP>/       — target-specific binaries (.bin)
 #
 # Requires ESP-IDF environment active: source /Users/rampa/esp/esp-idf/export.sh
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-DATA_DIR="${SCRIPT_DIR}/data"
-FAT_RAW="${SCRIPT_DIR}/build/fat_raw.bin"
-IMAGE="${SCRIPT_DIR}/build/storage.bin"
+
+PORT="${1:-${ESPPORT:-/dev/cu.usbserial-0001}}"
+CHIP="${2:-esp32s3}"
+
+DATA_COMMON="${SCRIPT_DIR}/data/common"
+DATA_TARGET="${SCRIPT_DIR}/data/${CHIP}"
+BUILD_DIR="${SCRIPT_DIR}/build"
+STAGING="${BUILD_DIR}/data_staging"
+FAT_RAW="${BUILD_DIR}/fat_raw.bin"
+IMAGE="${BUILD_DIR}/storage.bin"
 WL_WRAP="${SCRIPT_DIR}/wl_wrap.py"
 
 # Partition storage: offset 0x210000, size 4MB
@@ -31,11 +43,15 @@ if [ ! -x "${PYTHON}" ]; then
     PYTHON="python3"
 fi
 
-PORT="${1:-${ESPPORT:-/dev/cu.usbserial-0001}}"
-
 # ---- sanity checks ----
-if [ ! -d "${DATA_DIR}" ]; then
-    echo "ERROR: data/ directory not found at ${DATA_DIR}"
+if [ ! -d "${DATA_COMMON}" ]; then
+    echo "ERROR: data/common/ directory not found at ${DATA_COMMON}"
+    exit 1
+fi
+
+if [ ! -d "${DATA_TARGET}" ]; then
+    echo "ERROR: data/${CHIP}/ directory not found at ${DATA_TARGET}"
+    echo "  Build SDK binaries first: cd sdk && make TARGET=${CHIP}"
     exit 1
 fi
 
@@ -56,19 +72,28 @@ if ! command -v esptool.py &>/dev/null; then
     exit 1
 fi
 
-mkdir -p "${SCRIPT_DIR}/build"
+mkdir -p "${BUILD_DIR}"
+
+# ---- step 0: merge common + target into staging directory ----
+echo "Staging data for ${CHIP} ..."
+rm -rf "${STAGING}"
+mkdir -p "${STAGING}"
+cp "${DATA_COMMON}"/* "${STAGING}/" 2>/dev/null || true
+cp "${DATA_TARGET}"/* "${STAGING}/" 2>/dev/null || true
+echo "  common: $(ls "${DATA_COMMON}" 2>/dev/null | wc -l | tr -d ' ') files"
+echo "  ${CHIP}: $(ls "${DATA_TARGET}" 2>/dev/null | wc -l | tr -d ' ') files"
 
 # ---- step 1: build raw FAT image (no --wl_mode) ----
 # fatfsgen.py --wl_mode does NOT generate the WL state/config blocks that the
 # C wear_levelling driver expects. We generate a plain FAT image and then inject
 # the correct WL blocks with wl_wrap.py.
-echo "Building raw FAT image from ${DATA_DIR} ..."
+echo "Building raw FAT image ..."
 "${PYTHON}" "${FATFSGEN}" \
     --output_file "${FAT_RAW}" \
     --partition_size ${PARTITION_SIZE} \
     --sector_size 512 \
     --long_name_support \
-    "${DATA_DIR}"
+    "${STAGING}"
 
 # ---- step 2: inject WL state/config blocks ----
 echo "Injecting wear-levelling blocks ..."
@@ -76,10 +101,13 @@ python3 "${WL_WRAP}" "${FAT_RAW}" "${IMAGE}" ${PARTITION_OFFSET} ${PARTITION_SIZ
 
 echo "Image: ${IMAGE} ($(wc -c < "${IMAGE}") bytes)"
 
+# ---- cleanup staging ----
+rm -rf "${STAGING}"
+
 # ---- flash ----
 echo "Flashing to ${PORT} at offset ${PARTITION_OFFSET} ..."
 esptool.py \
-    --chip esp32s3 \
+    --chip "${CHIP}" \
     --port "${PORT}" \
     --baud 921600 \
     write_flash \

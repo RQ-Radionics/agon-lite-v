@@ -1,0 +1,15 @@
+dependencies:
+  # WiFi via ESP32-C6 coprocessor (ESP-Hosted over SDIO)
+  # Only pulled in on targets without native WiFi radio
+  espressif/esp_wifi_remote:
+    version: ">=0.10,<2.0"
+    rules:
+      - if: "target in [esp32p4]"
+  espressif/esp_hosted:
+    version: "~2"
+    rules:
+      - if: "target in [esp32p4]"
+  espressif/esp-extconn:
+    version: "~0.2.0"
+    rules:
+      - if: "target in [esp32p4]"

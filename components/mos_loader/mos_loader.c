@@ -1,14 +1,15 @@
 /*
  * mos_loader.c - User program loader for ESP32-MOS
  *
- * Loads a flat Xtensa binary from FAT into a fixed PSRAM exec arena and
+ * Loads a flat binary from FAT into a fixed PSRAM exec arena and
  * calls its entry point: int _start(int argc, char **argv, t_mos_api *mos)
  *
+ * Supports ESP32-S3 (Xtensa LX7) and ESP32-P4 (RISC-V RV32IMAFC).
  * The binary MUST be compiled with MOS_EXEC_BASE == address of s_exec_arena
  * (read from esp32-mos.map after first build).
  *
  * Constraints:
- *   - PSRAM exec requires 32-byte cache-line alignment (ESP32-S3)
+ *   - PSRAM exec requires 32-byte cache-line alignment
  *   - Size must also be rounded up to 32 bytes for esp_cache_msync()
  *   - Only one user program can run at a time (single arena)
  */
@@ -30,22 +31,28 @@
 
 static const char *TAG = "mos_loader";
 
-/* Fixed PSRAM exec arena — 64 KB, 32-byte aligned (cache line).
- * EXT_RAM_BSS_ATTR places it in .ext_ram.bss → PSRAM data window (0x3Cxxxxxx).
- * The same physical pages are also accessible via the instruction window
- * (0x42xxxxxx) which the CPU uses to fetch code.
+/* Fixed PSRAM exec arena — 512 KB, 32-byte aligned (cache line).
+ * EXT_RAM_BSS_ATTR places it in .ext_ram.bss → PSRAM.
  *
- * MOS_EXEC_BASE in sdk/Makefile MUST equal the IBUS alias of s_exec_arena:
- *   ibus_addr = (dbus_addr - SOC_MMU_DBUS_VADDR_BASE) + SOC_MMU_IBUS_VADDR_BASE
- * (check build/esp32-mos.map after first build for s_exec_arena dbus addr) */
+ * ESP32-S3: data window 0x3Cxxxxxx, instruction window 0x42xxxxxx (separate).
+ * ESP32-P4: unified address space at 0x48xxxxxx (DBUS == IBUS).
+ *
+ * MOS_EXEC_BASE in sdk/Makefile MUST equal the exec alias of s_exec_arena.
+ * (check build/esp32-mos.map after first build for s_exec_arena address) */
 #define MOS_EXEC_SIZE   (512 * 1024)
 static EXT_RAM_BSS_ATTR __attribute__((aligned(32))) uint8_t s_exec_arena[MOS_EXEC_SIZE];
 
-/* Convert a PSRAM data-bus vaddr to its instruction-bus alias */
+/* Convert a PSRAM data-bus vaddr to its instruction-bus alias.
+ * ESP32-S3: DBUS 0x3C000000 → IBUS 0x42000000 (separate windows).
+ * ESP32-P4: unified address space — no conversion needed. */
 static inline void *dbus_to_ibus(const void *dbus_ptr)
 {
+#if CONFIG_IDF_TARGET_ESP32P4
+    return (void *)dbus_ptr;
+#else
     uint32_t offset = (uint32_t)dbus_ptr - SOC_MMU_DBUS_VADDR_BASE;
     return (void *)(SOC_MMU_IBUS_VADDR_BASE + offset);
+#endif
 }
 
 /* Entry point prototype for user programs */
@@ -92,8 +99,19 @@ int mos_loader_exec(const char *path, int argc, char **argv)
         return -1;
     }
 
-    /* 3b. Validate magic: byte[0] must be 0x06 (Xtensa density 'j' opcode).
-     *     eZ80/Agon binaries start differently — reject early. */
+    /* 3b. Validate magic: byte[0] must be the ISA's jump opcode.
+     *     ESP32-S3 (Xtensa): 0x06 (density 'j' opcode)
+     *     ESP32-P4 (RISC-V): 0x6F (JAL opcode) */
+#if CONFIG_IDF_TARGET_ESP32P4
+    if (s_exec_arena[0] != 0x6F) {
+        ESP_LOGE(TAG, "'%s': not a valid ESP32-MOS binary (got %02x %02x %02x, "
+                 "expected RISC-V JAL opcode 0x6F). "
+                 "This may be an Xtensa or eZ80 binary — it cannot run on RISC-V.",
+                 resolved,
+                 s_exec_arena[0], s_exec_arena[1], s_exec_arena[2]);
+        return -1;
+    }
+#else
     if (s_exec_arena[0] != 0x06) {
         ESP_LOGE(TAG, "'%s': not a valid ESP32-MOS binary (got %02x %02x %02x, "
                  "expected Xtensa 'j' opcode 0x06). "
@@ -102,6 +120,7 @@ int mos_loader_exec(const char *path, int argc, char **argv)
                  s_exec_arena[0], s_exec_arena[1], s_exec_arena[2]);
         return -1;
     }
+#endif
 
     /* 4. Sync caches so the CPU sees the freshly-loaded binary.
      *
@@ -113,8 +132,8 @@ int mos_loader_exec(const char *path, int argc, char **argv)
      *         firmware reads from DBUS (0x3Cxxxxxx) reload from PSRAM.
      *
      * Step B: M2C invalidate icache — drop stale icache lines for the IBUS
-     *         window (0x42xxxxxx) so the CPU fetches fresh code from PSRAM.
-     *         The IBUS address is the DBUS address + 0x6000000.
+     *         window so the CPU fetches fresh code from PSRAM.
+     *         ESP32-S3: IBUS = DBUS + 0x6000000. ESP32-P4: same address.
      *
      * Size rounded up to cache-line boundary (32 bytes). */
     size_t sync_size = (size + 31) & ~31u;
@@ -141,10 +160,9 @@ int mos_loader_exec(const char *path, int argc, char **argv)
         return -1;
     }
 
-    /* 5. Jump via instruction-bus alias (0x42xxxxxx).
-     * s_exec_arena is in the data window (0x3Cxxxxxx); the same physical
-     * PSRAM pages are also mapped at the instruction window (0x42xxxxxx).
-     * The CPU can only fetch code from the IBUS range. */
+    /* 5. Jump via instruction-bus alias.
+     * ESP32-S3: s_exec_arena is in DBUS (0x3C...); exec via IBUS (0x42...).
+     * ESP32-P4: unified address space — DBUS == IBUS. */
     void *ibus_entry = dbus_to_ibus(s_exec_arena);
     mos_entry_t entry = (mos_entry_t)ibus_entry;
     ESP_LOGI(TAG, "Running '%s'", resolved);
