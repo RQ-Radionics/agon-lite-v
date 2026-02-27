@@ -28,6 +28,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_timer.h"
+#include "mos_i2c.h"
 
 /* Allocate from PSRAM for user programs (BBC BASIC needs large heaps) */
 static void *mos_malloc_spiram(size_t size)
@@ -370,6 +371,30 @@ int mos_api_kbhit(void)
     return mos_kbhit() ? 1 : 0;
 }
 
+/* =========================================================================
+ * I2C master
+ * ========================================================================= */
+
+static void mos_api_i2c_open(uint8_t frequency)
+{
+    mos_I2C_OPEN(frequency);
+}
+
+static void mos_api_i2c_close(void)
+{
+    mos_I2C_CLOSE();
+}
+
+static uint8_t mos_api_i2c_write(uint8_t addr, uint8_t size, const char *buf)
+{
+    return mos_I2C_WRITE(addr, size, buf);
+}
+
+static uint8_t mos_api_i2c_read(uint8_t addr, uint8_t size, char *buf)
+{
+    return mos_I2C_READ(addr, size, buf);
+}
+
 const char *mos_api_variant(void)
 {
     return VERSION_VARIANT;
@@ -434,4 +459,9 @@ void mos_api_table_init(void)
     t->get_ticks_ms = mos_api_get_ticks_ms;
 
     t->kbhit        = mos_api_kbhit;
+
+    t->i2c_open     = mos_api_i2c_open;
+    t->i2c_close    = mos_api_i2c_close;
+    t->i2c_write    = mos_api_i2c_write;
+    t->i2c_read     = mos_api_i2c_read;
 }

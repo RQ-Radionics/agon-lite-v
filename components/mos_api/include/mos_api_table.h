@@ -91,6 +91,12 @@ typedef struct {
     /* --- non-blocking input check --- */
     int      (*kbhit)(void);             /* non-zero if a key is available */
 
+    /* --- I2C master --- */
+    void     (*i2c_open)(uint8_t frequency);
+    void     (*i2c_close)(void);
+    uint8_t  (*i2c_write)(uint8_t addr, uint8_t size, const char *buf);
+    uint8_t  (*i2c_read)(uint8_t addr, uint8_t size, char *buf);
+
 } t_mos_api;
 
 #endif /* MOS_API_TABLE_H */
