@@ -1,5 +1,9 @@
 # ESP-IDF build output
 build/
+sdkconfig
+sdkconfig.old
+managed_components/
+dependencies.lock
 
 # Editor / LSP caches
 .cache/
