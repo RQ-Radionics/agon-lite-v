@@ -50,6 +50,15 @@ bool mos_vdp_kbhit(void);
 bool mos_vdp_disconnecting(void);
 
 /**
+ * Flush the TX write buffer immediately.
+ * mos_vdp_putch() accumulates bytes in a buffer and only calls send()
+ * when the buffer is full.  Call mos_vdp_flush() to force a send of any
+ * pending bytes (e.g. after a complete VDU command sequence, or before
+ * blocking on input).
+ */
+void mos_vdp_flush(void);
+
+/**
  * Synchronise with the VDP: send a General Poll (VDU 23,0,&80,n) and
  * block until the VDP echoes back the response packet.  This guarantees
  * that all previously queued VDU bytes have been processed by the VDP

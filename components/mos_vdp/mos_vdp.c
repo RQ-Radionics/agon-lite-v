@@ -69,6 +69,11 @@ static SemaphoreHandle_t s_gp_sem = NULL;
 /* Echo byte we sent in the last General Poll request */
 static volatile uint8_t  s_gp_echo = 0;
 
+/* TX write buffer — coalesces single-byte putch() calls */
+#define VDP_TX_BUF_SIZE  256
+static uint8_t  s_tx_buf[VDP_TX_BUF_SIZE];
+static int      s_tx_len = 0;
+
 /* ------------------------------------------------------------------ */
 /* VDP protocol parser                                                  */
 /* ------------------------------------------------------------------ */
@@ -281,6 +286,9 @@ static void vdp_server_task(void *arg)
             }
         }
 
+        /* Discard any buffered TX bytes for the disconnected client */
+        s_tx_len = 0;
+
         xSemaphoreTake(s_sock_mu, portMAX_DELAY);
         close(s_client_fd);
         s_client_fd     = -1;
@@ -340,20 +348,41 @@ bool mos_vdp_disconnecting(void)
     return s_disconnecting;
 }
 
-void mos_vdp_putch(uint8_t c)
+/* Flush the TX write buffer — sends all buffered bytes in one send() call.
+ * Caller must NOT hold s_sock_mu. */
+void mos_vdp_flush(void)
 {
+    if (s_tx_len == 0) return;
+
     xSemaphoreTake(s_sock_mu, portMAX_DELAY);
-    int fd = s_client_fd;
+    int fd  = s_client_fd;
+    int len = s_tx_len;
+    s_tx_len = 0;
     xSemaphoreGive(s_sock_mu);
 
-    if (fd < 0) {
+    if (fd < 0) return;
+
+    int sent = 0;
+    while (sent < len) {
+        int r = send(fd, s_tx_buf + sent, len - sent, 0);
+        if (r <= 0) {
+            ESP_LOGW(TAG, "flush send() failed: %d", errno);
+            break;
+        }
+        sent += r;
+    }
+}
+
+void mos_vdp_putch(uint8_t c)
+{
+    if (s_client_fd < 0) {
         ESP_LOGD(TAG, "putch 0x%02x dropped (no client)", c);
         return;
     }
-    /* Blocking send — MSG_DONTWAIT silently drops bytes when TCP buffer is full */
-    int r = send(fd, &c, 1, 0);
-    if (r < 0) {
-        ESP_LOGW(TAG, "putch 0x%02x send() failed: %d", c, errno);
+
+    s_tx_buf[s_tx_len++] = c;
+    if (s_tx_len >= VDP_TX_BUF_SIZE) {
+        mos_vdp_flush();
     }
 }
 
@@ -363,6 +392,8 @@ int mos_vdp_getch(void)
     while (!s_connected) {
         vTaskDelay(pdMS_TO_TICKS(50));
     }
+    /* Flush any pending TX bytes before blocking on input */
+    mos_vdp_flush();
     if (xQueueReceive(s_rx_queue, &byte, portMAX_DELAY) == pdTRUE) {
         /* Wake byte sent on disconnect — check the flag */
         if (s_disconnecting) return -1;
@@ -383,6 +414,9 @@ void mos_vdp_sync(void)
         vTaskDelay(pdMS_TO_TICKS(20));
         return;
     }
+
+    /* Flush pending TX bytes before sending the poll request */
+    mos_vdp_flush();
 
     /* Drain any stale GP signal from a previous call */
     xSemaphoreTake(s_gp_sem, 0);
