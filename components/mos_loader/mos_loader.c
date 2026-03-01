@@ -23,6 +23,9 @@
 #include "esp_heap_caps.h"
 #include "esp_cache.h"
 #include "soc/ext_mem_defs.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "freertos/semphr.h"
 
 #include "mos_loader.h"
 #include "mos_fs.h"
@@ -66,6 +69,29 @@ static inline void *dbus_to_ibus(const void *dbus_ptr)
 
 /* Entry point prototype for user programs */
 typedef int (*mos_entry_t)(int argc, char **argv, t_mos_api *mos);
+
+/* Stack size for user program task — 256 KB in PSRAM.
+ * app_main stack (CONFIG_ESP_MAIN_TASK_STACK_SIZE) is only ~8-32 KB;
+ * interpreters like BBC BASIC recurse deeply and need much more. */
+#define USER_TASK_STACK_KB   256
+#define USER_TASK_STACK_SIZE (USER_TASK_STACK_KB * 1024)
+
+typedef struct {
+    mos_entry_t     entry;
+    int             argc;
+    char          **argv;
+    t_mos_api      *mos;
+    int             retval;
+    SemaphoreHandle_t done;
+} user_task_args_t;
+
+static void user_task(void *pvArg)
+{
+    user_task_args_t *a = (user_task_args_t *)pvArg;
+    a->retval = a->entry(a->argc, a->argv, a->mos);
+    xSemaphoreGive(a->done);
+    vTaskDelete(NULL);
+}
 
 int mos_loader_exec(const char *path, int argc, char **argv)
 {
@@ -170,15 +196,57 @@ int mos_loader_exec(const char *path, int argc, char **argv)
         return -1;
     }
 
-    /* 5. Jump via instruction-bus alias.
-     * ESP32-S3: s_exec_arena is in DBUS (0x3C...); exec via IBUS (0x42...).
-     * ESP32-P4: unified address space — DBUS == IBUS. */
+    /* 5. Launch user program in a dedicated FreeRTOS task with a large stack
+     * allocated from PSRAM.  This avoids overflowing app_main's stack when
+     * running deep-recursing interpreters (e.g. BBC BASIC bbeval/bbexec).
+     * app_main blocks on a semaphore until the user program returns. */
     void *ibus_entry = dbus_to_ibus(s_exec_arena);
-    mos_entry_t entry = (mos_entry_t)ibus_entry;
+    mos_entry_t entry_fn = (mos_entry_t)ibus_entry;
     ESP_LOGI(TAG, "Running '%s'", resolved);
 
-    int ret = entry(argc, argv, mos_api_table_get());
+    user_task_args_t args = {
+        .entry  = entry_fn,
+        .argc   = argc,
+        .argv   = argv,
+        .mos    = mos_api_table_get(),
+        .retval = -1,
+        .done   = xSemaphoreCreateBinary(),
+    };
+    if (!args.done) {
+        ESP_LOGE(TAG, "Failed to create semaphore");
+        return -1;
+    }
 
+    /* Allocate task stack in PSRAM */
+    StackType_t  *stack = heap_caps_malloc(USER_TASK_STACK_SIZE, MALLOC_CAP_SPIRAM);
+    StaticTask_t *tcb   = heap_caps_malloc(sizeof(StaticTask_t), MALLOC_CAP_INTERNAL);
+    if (!stack || !tcb) {
+        ESP_LOGE(TAG, "Failed to allocate user task stack (%u KB)", USER_TASK_STACK_KB);
+        free(stack); free(tcb);
+        vSemaphoreDelete(args.done);
+        return -1;
+    }
+
+    TaskHandle_t task = xTaskCreateStatic(
+        user_task, "user_prog",
+        USER_TASK_STACK_SIZE / sizeof(StackType_t),
+        &args,
+        tskIDLE_PRIORITY + 5,
+        stack, tcb);
+    if (!task) {
+        ESP_LOGE(TAG, "xTaskCreateStatic failed");
+        free(stack); free(tcb);
+        vSemaphoreDelete(args.done);
+        return -1;
+    }
+
+    /* Block until user program exits */
+    xSemaphoreTake(args.done, portMAX_DELAY);
+    vSemaphoreDelete(args.done);
+    free(stack);
+    free(tcb);
+
+    int ret = args.retval;
     ESP_LOGI(TAG, "'%s' exited %d", resolved, ret);
     return ret;
 }

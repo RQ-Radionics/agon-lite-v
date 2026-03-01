@@ -1,5 +1,9 @@
 # ESP32-MOS — ESP32-P4 target-specific settings
 
+# Main task stack — BBC BASIC (bbeval/bbexec) recurse deeply on RISC-V ABI;
+# 8KB (default) overflows. 32KB is safe.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=32768
+
 # Chip revision: support v1.x silicon (Waveshare ESP32-P4-WIFI6 uses v1.3)
 # v1.x and v3.x are mutually exclusive silicon families; select <v3 mode.
 CONFIG_ESP32P4_SELECTS_REV_LESS_V3=y
