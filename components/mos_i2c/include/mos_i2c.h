@@ -24,8 +24,8 @@
  *
  * GPIO pins — configure once in sdkconfig or pass explicit values to
  * mos_i2c_init_pins() before calling mos_I2C_OPEN().  Defaults:
- *   SDA = GPIO 8
- *   SCL = GPIO 9
+ *   ESP32-P4 (Waveshare ESP32-P4-WIFI6): SDA = GPIO 7, SCL = GPIO 8
+ *   ESP32-S3 DevKit:                      SDA = GPIO 8, SCL = GPIO 9
  */
 
 #ifndef MOS_I2C_H
@@ -48,14 +48,14 @@
 /* ── Default GPIO pins ─────────────────────────────────────────────────── */
 #ifndef MOS_I2C_SDA_GPIO
   #if CONFIG_IDF_TARGET_ESP32P4
-    #define MOS_I2C_SDA_GPIO  6   /* ESP32-P4-Function-EV-Board */
+    #define MOS_I2C_SDA_GPIO  7   /* Waveshare ESP32-P4-WIFI6 (40-pin header) */
   #else
     #define MOS_I2C_SDA_GPIO  8   /* ESP32-S3 DevKit */
   #endif
 #endif
 #ifndef MOS_I2C_SCL_GPIO
   #if CONFIG_IDF_TARGET_ESP32P4
-    #define MOS_I2C_SCL_GPIO  7   /* ESP32-P4-Function-EV-Board */
+    #define MOS_I2C_SCL_GPIO  8   /* Waveshare ESP32-P4-WIFI6 (40-pin header) */
   #else
     #define MOS_I2C_SCL_GPIO  9   /* ESP32-S3 DevKit */
   #endif
