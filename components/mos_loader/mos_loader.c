@@ -9,8 +9,8 @@
  * (read from esp32-mos.map after first build).
  *
  * Constraints:
- *   - PSRAM exec requires 32-byte cache-line alignment
- *   - Size must also be rounded up to 32 bytes for esp_cache_msync()
+ *   - PSRAM exec arena aligned to 64 bytes (P4 cache line; safe for S3 too)
+ *   - M2C icache invalidation range must be cache-line aligned (64B P4, 32B S3)
  *   - Only one user program can run at a time (single arena)
  */
 
@@ -31,16 +31,25 @@
 
 static const char *TAG = "mos_loader";
 
-/* Fixed PSRAM exec arena — 512 KB, 32-byte aligned (cache line).
+/* Fixed PSRAM exec arena — 512 KB.
  * EXT_RAM_BSS_ATTR places it in .ext_ram.bss → PSRAM.
  *
  * ESP32-S3: data window 0x3Cxxxxxx, instruction window 0x42xxxxxx (separate).
+ *           Cache line = 32 bytes.
  * ESP32-P4: unified address space at 0x48xxxxxx (DBUS == IBUS).
+ *           Cache line = 64 bytes — must align arena AND sync sizes to 64B.
  *
  * MOS_EXEC_BASE in sdk/Makefile MUST equal the exec alias of s_exec_arena.
  * (check build/esp32-mos.map after first build for s_exec_arena address) */
 #define MOS_EXEC_SIZE   (512 * 1024)
-static EXT_RAM_BSS_ATTR __attribute__((aligned(32))) uint8_t s_exec_arena[MOS_EXEC_SIZE];
+
+#if CONFIG_IDF_TARGET_ESP32P4
+#  define MOS_CACHE_LINE  64u
+#else
+#  define MOS_CACHE_LINE  32u
+#endif
+
+static EXT_RAM_BSS_ATTR __attribute__((aligned(64))) uint8_t s_exec_arena[MOS_EXEC_SIZE];
 
 /* Convert a PSRAM data-bus vaddr to its instruction-bus alias.
  * ESP32-S3: DBUS 0x3C000000 → IBUS 0x42000000 (separate windows).
@@ -128,18 +137,16 @@ int mos_loader_exec(const char *path, int argc, char **argv)
      * data lands in the dcache as dirty lines — NOT yet in physical PSRAM.
      *
      * Step A: C2M writeback — flush dirty dcache lines to physical PSRAM.
-     *         With INVALIDATE, also drop those lines from dcache so future
-     *         firmware reads from DBUS (0x3Cxxxxxx) reload from PSRAM.
+     *         UNALIGNED flag allowed for C2M; covers any size.
      *
-     * Step B: M2C invalidate icache — drop stale icache lines for the IBUS
-     *         window so the CPU fetches fresh code from PSRAM.
+     * Step B: M2C invalidate icache — drop stale icache lines so the CPU
+     *         fetches fresh code from PSRAM.
      *         ESP32-S3: IBUS = DBUS + 0x6000000. ESP32-P4: same address.
-     *
-     * Size rounded up to cache-line boundary (32 bytes). */
-    size_t sync_size = (size + 31) & ~31u;
+     *         CRITICAL: M2C does NOT accept UNALIGNED — base and size MUST
+     *         be aligned to MOS_CACHE_LINE (64B on P4, 32B on S3). */
 
-    /* Step A: write back dcache → PSRAM, then invalidate dcache lines */
-    esp_err_t err = esp_cache_msync(s_exec_arena, sync_size,
+    /* Step A: C2M — UNALIGNED allowed */
+    esp_err_t err = esp_cache_msync(s_exec_arena, size,
                                     ESP_CACHE_MSYNC_FLAG_DIR_C2M |
                                     ESP_CACHE_MSYNC_FLAG_INVALIDATE |
                                     ESP_CACHE_MSYNC_FLAG_TYPE_DATA |
@@ -149,9 +156,12 @@ int mos_loader_exec(const char *path, int argc, char **argv)
         return -1;
     }
 
-    /* Step B: invalidate icache for IBUS window so instruction fetches reload */
-    void *ibus_arena = dbus_to_ibus(s_exec_arena);
-    err = esp_cache_msync(ibus_arena, sync_size,
+    /* Step B: M2C — align base down, end up, to cache-line boundary */
+    void    *ibus_arena = dbus_to_ibus(s_exec_arena);
+    uint32_t m2c_base   = (uint32_t)ibus_arena & ~(MOS_CACHE_LINE - 1u);
+    uint32_t m2c_end    = ((uint32_t)ibus_arena + size + MOS_CACHE_LINE - 1u)
+                          & ~(MOS_CACHE_LINE - 1u);
+    err = esp_cache_msync((void *)m2c_base, (size_t)(m2c_end - m2c_base),
                           ESP_CACHE_MSYNC_FLAG_DIR_M2C |
                           ESP_CACHE_MSYNC_FLAG_INVALIDATE |
                           ESP_CACHE_MSYNC_FLAG_TYPE_INST);
