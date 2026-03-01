@@ -70,12 +70,15 @@ static inline void *dbus_to_ibus(const void *dbus_ptr)
 /* Entry point prototype for user programs */
 typedef int (*mos_entry_t)(int argc, char **argv, t_mos_api *mos);
 
-/* Stack size for user program task — 64 KB in internal DRAM.
- * app_main stack (CONFIG_ESP_MAIN_TASK_STACK_SIZE) is only ~8-32 KB;
- * interpreters like BBC BASIC recurse deeply and need much more.
- * Must be in DRAM (not PSRAM): flash driver disables cache during reads,
- * which makes PSRAM-backed stacks inaccessible → assert in cache_utils. */
-#define USER_TASK_STACK_KB   64
+/* Stack size for user program task — in internal DRAM.
+ * Must be DRAM (not PSRAM): flash driver disables cache during reads,
+ * which makes PSRAM-backed stacks inaccessible → assert in cache_utils.
+ *
+ * BBC BASIC bbeval/bbexec recurse deeply; each RISC-V frame saves all
+ * s-registers (no register windows). Measured usage: >64KB for typical
+ * BASIC programs with nested expressions. 128KB is safe.
+ * ESP32-P4 has 768KB internal DRAM so this is fine. */
+#define USER_TASK_STACK_KB   128
 #define USER_TASK_STACK_SIZE (USER_TASK_STACK_KB * 1024)
 
 typedef struct {
