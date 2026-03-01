@@ -39,4 +39,20 @@
  */
 int mos_loader_exec(const char *path, int argc, char **argv);
 
+/**
+ * Terminate the currently running user program and return to the MOS shell.
+ *
+ * Implemented via longjmp back into user_task (which is still on the
+ * FreeRTOS stack), so vTaskDelete runs normally afterwards.
+ *
+ * Registered as mos_api_table.exit so user programs can call mos->exit(n).
+ * User programs must NOT call libc exit() / _exit() directly.
+ */
+void mos_loader_exit_fn(int status);
+
+/**
+ * Return the base address of the exec arena (for diagnostics).
+ */
+uintptr_t mos_loader_exec_base(void);
+
 #endif /* MOS_LOADER_H */

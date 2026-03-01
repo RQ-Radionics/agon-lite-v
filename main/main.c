@@ -24,6 +24,7 @@
 #include "mos_sysvars.h"
 #include "mos_shell.h"
 #include "mos_api.h"
+#include "mos_loader.h"
 #include "mos_wifi.h"
 #include "mos_sntp.h"
 #include "mos_vdp.h"
@@ -174,6 +175,7 @@ void app_main(void)
 
     /* 7. MOS API jump table */
     mos_api_table_init();
+    mos_api_set_exit_fn(mos_loader_exit_fn);
 
     /* 8. Shell init */
     mos_shell_init();

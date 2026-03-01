@@ -97,6 +97,18 @@ typedef struct {
     uint8_t  (*i2c_write)(uint8_t addr, uint8_t size, const char *buf);
     uint8_t  (*i2c_read)(uint8_t addr, uint8_t size, char *buf);
 
+    /* --- VDP synchronisation --- */
+    /* Send a General Poll to the VDP and block until the response arrives.
+     * This ensures all previously queued VDU bytes have been processed by
+     * the VDP before BASIC continues — equivalent to *FX 19 on the Agon. */
+    void     (*vdp_sync)(void);
+
+    /* --- program exit --- */
+    /* Terminate the current user program and return to the MOS shell.
+     * Implemented by the loader via longjmp inside the user_task frame.
+     * User programs should call this instead of exit() / _exit(). */
+    void     (*exit)(int status);
+
 } t_mos_api;
 
 #endif /* MOS_API_TABLE_H */

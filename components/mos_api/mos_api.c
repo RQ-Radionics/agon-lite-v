@@ -16,6 +16,7 @@
 #include <errno.h>
 #include "mos_api.h"
 #include "mos_hal.h"
+#include "mos_vdp.h"
 #include "mos_fs.h"
 #include "mos_file.h"
 #include "mos_sysvars.h"
@@ -464,4 +465,13 @@ void mos_api_table_init(void)
     t->i2c_close    = mos_api_i2c_close;
     t->i2c_write    = mos_api_i2c_write;
     t->i2c_read     = mos_api_i2c_read;
+
+    t->vdp_sync     = mos_vdp_sync;
+
+    t->exit         = NULL;  /* registered later via mos_api_set_exit_fn() */
+}
+
+void mos_api_set_exit_fn(void (*fn)(int status))
+{
+    s_mos_api_table.exit = fn;
 }

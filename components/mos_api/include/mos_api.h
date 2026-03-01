@@ -156,6 +156,17 @@ void mos_api_table_init(void);
  */
 t_mos_api *mos_api_table_get(void);
 
+/**
+ * Register the exit() implementation from mos_loader.
+ * Must be called after mos_api_table_init() and before launching any user
+ * program.  Avoids a circular component dependency between mos_api and
+ * mos_loader.
+ *
+ * @param fn  Function that terminates the running user program via longjmp.
+ *            Pass NULL to clear (e.g. during teardown).
+ */
+void mos_api_set_exit_fn(void (*fn)(int status));
+
 #ifdef __cplusplus
 }
 #endif

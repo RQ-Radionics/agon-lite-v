@@ -26,6 +26,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
+#include <setjmp.h>
 
 #include "mos_loader.h"
 #include "mos_fs.h"
@@ -88,12 +89,42 @@ typedef struct {
     t_mos_api      *mos;
     int             retval;
     SemaphoreHandle_t done;
+    jmp_buf         exit_jmp;   /* _exit() longjmps here — stays inside user_task */
+    int             exit_status;
 } user_task_args_t;
+
+/* Global pointer so mos_exit() can reach the jmp_buf inside user_task.
+ * Only one user program runs at a time so a single global is safe. */
+static user_task_args_t *s_user_task_args = NULL;
+
+/* Called via mos->exit(status) from user programs.
+ * longjmps back into user_task (which is still on the FreeRTOS stack),
+ * so vTaskDelete runs normally afterwards.
+ * Exposed via mos_loader.h so mos_api.c can register it in the API table. */
+void mos_loader_exit_fn(int status)
+{
+    if (s_user_task_args) {
+        s_user_task_args->exit_status = status;
+        longjmp(s_user_task_args->exit_jmp, 1);
+    }
+    /* Fallback if called outside a user task — just spin */
+    while (1) { vTaskDelay(1); }
+}
 
 static void user_task(void *pvArg)
 {
     user_task_args_t *a = (user_task_args_t *)pvArg;
-    a->retval = a->entry(a->argc, a->argv, a->mos);
+    s_user_task_args = a;
+
+    /* setjmp here so mos->exit() can longjmp back into this frame,
+     * which is still inside FreeRTOS's task wrapper — safe to call
+     * xSemaphoreGive + vTaskDelete afterwards. */
+    if (setjmp(a->exit_jmp) == 0)
+        a->retval = a->entry(a->argc, a->argv, a->mos);
+    else
+        a->retval = a->exit_status;
+
+    s_user_task_args = NULL;
     xSemaphoreGive(a->done);
     vTaskDelete(NULL);
 }
