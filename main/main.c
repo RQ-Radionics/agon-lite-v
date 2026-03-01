@@ -133,34 +133,42 @@ void app_main(void)
         ESP_LOGW(TAG, "SD card not available");
     }
 
-    /* 4. WiFi - wait up to 15 s for IP
-     * On ESP32-P4 this uses esp_wifi_remote via ESP32-C6 coprocessor (SDIO) */
-    mos_printf("Connecting to WiFi...\r\n");
-    int wifi_ok = mos_wifi_init(15000);
-    if (wifi_ok == 0) {
-        mos_printf("WiFi OK  IP: %s\r\n", mos_wifi_ip());
-    } else {
-        mos_printf("WiFi FAIL - network features unavailable\r\n");
-    }
-
-    /* 5. SNTP - only if WiFi is up; wait up to 10 s */
-    if (wifi_ok == 0) {
-        if (mos_sntp_init(NULL, 10000) == 0) {
-            mos_printf("Clock synced via NTP\r\n");
-        } else {
-            mos_printf("NTP sync timeout - clock not set\r\n");
+    /* 4. WiFi — retry until connected (VDP over TCP requires network).
+     * On ESP32-P4 this uses esp_wifi_remote via ESP32-C6 coprocessor (SDIO).
+     * We loop with increasing back-off: 15 s first attempt, then 30 s each. */
+    int wifi_ok = -1;
+    {
+        uint32_t delay_ms = 15000;
+        while (wifi_ok != 0) {
+            mos_printf("Connecting to WiFi...\r\n");
+            wifi_ok = mos_wifi_init(delay_ms);
+            if (wifi_ok == 0) {
+                mos_printf("WiFi OK  IP: %s\r\n", mos_wifi_ip());
+            } else {
+                mos_printf("WiFi FAIL - retrying in 30s\r\n");
+                delay_ms = 30000;
+                vTaskDelay(pdMS_TO_TICKS(5000));
+            }
         }
     }
 
-    /* 6. VDP TCP server */
+    /* 5. SNTP - WiFi is up; wait up to 10 s */
+    if (mos_sntp_init(NULL, 10000) == 0) {
+        mos_printf("Clock synced via NTP\r\n");
+    } else {
+        mos_printf("NTP sync timeout - clock not set\r\n");
+    }
+
+    /* 6. VDP TCP server — must succeed; retry if it fails */
     bool vdp_ok = false;
-    if (wifi_ok == 0) {
+    while (!vdp_ok) {
         if (mos_vdp_init() == 0) {
             vdp_ok = true;
             mos_printf("VDP server on port %d - connect to start shell\r\n",
                        MOS_VDP_TCP_PORT);
         } else {
-            mos_printf("VDP server failed to start\r\n");
+            mos_printf("VDP server failed - retrying in 5s\r\n");
+            vTaskDelay(pdMS_TO_TICKS(5000));
         }
     }
 
@@ -197,8 +205,6 @@ void app_main(void)
 
         /* Interactive shell - returns when VDP disconnects */
         mos_shell_run();
-
-        if (!vdp_ok) break;  /* safety */
 
         ESP_LOGI(TAG, "VDP client disconnected - waiting for next connection");
     }

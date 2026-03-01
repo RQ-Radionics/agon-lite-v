@@ -10,6 +10,8 @@
 #include "sdmmc_cmd.h"
 #include "driver/sdspi_host.h"
 #include "driver/spi_common.h"
+#include "driver/sdmmc_host.h"
+#include "sd_pwr_ctrl_by_on_chip_ldo.h"
 #include "mos_fs.h"
 
 static const char *TAG = "mos_fs";
@@ -70,43 +72,100 @@ int mos_fs_mount_flash(void)
 /* SD card (external)                                                   */
 /* ------------------------------------------------------------------ */
 
+#if CONFIG_IDF_TARGET_ESP32P4
 /*
- * SPI GPIO defaults — override via sdkconfig or Kconfig.
- * Adjust to match your hardware before flashing.
+ * ESP32-P4: SDMMC native interface (Slot 0, 4-bit, IOMUX-fixed GPIOs).
  *
+ * Waveshare ESP32-P4-WIFI6 pin mapping (same as Espressif P4-Function-EV-Board):
+ *   CLK = GPIO43   CMD = GPIO44
+ *   D0  = GPIO39   D1  = GPIO40   D2  = GPIO41   D3  = GPIO42
+ *
+ * The SDMMC IO pins on ESP32-P4 are powered by internal LDO_VO4.
+ * Without enabling it, card init times out immediately.
+ *
+ * Slot 1 (GPIOs 18-19, 14-17) is used by the esp-hosted C6 WiFi SDIO link
+ * and must NOT be touched here.
+ */
+#define MOS_SD_LDO_CHAN   4   /* LDO_VO4 powers the SDMMC IO pins */
+
+int mos_fs_mount_sd(void)
+{
+    if (s_sd_mounted) {
+        return 0;
+    }
+
+    esp_vfs_fat_sdmmc_mount_config_t mount_cfg = {
+        .format_if_mount_failed = false,
+        .max_files              = 8,
+        .allocation_unit_size   = 512,
+    };
+
+    /* Enable LDO_VO4 to power SDMMC IO pins */
+    sd_pwr_ctrl_ldo_config_t ldo_cfg = { .ldo_chan_id = MOS_SD_LDO_CHAN };
+    sd_pwr_ctrl_handle_t pwr_handle  = NULL;
+    esp_err_t err = sd_pwr_ctrl_new_on_chip_ldo(&ldo_cfg, &pwr_handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "SD LDO init failed: %s", esp_err_to_name(err));
+        return -1;
+    }
+
+    sdmmc_host_t host = SDMMC_HOST_DEFAULT();
+    host.slot         = SDMMC_HOST_SLOT_0;
+    host.max_freq_khz = SDMMC_FREQ_DEFAULT;  /* 20 MHz — safe for all cards */
+    host.pwr_ctrl_handle = pwr_handle;
+
+    sdmmc_slot_config_t slot = SDMMC_SLOT_CONFIG_DEFAULT();
+    slot.width = 4;
+    slot.clk   = 43;
+    slot.cmd   = 44;
+    slot.d0    = 39;
+    slot.d1    = 40;
+    slot.d2    = 41;
+    slot.d3    = 42;
+    slot.cd    = SDMMC_SLOT_NO_CD;   /* no Card Detect pin on Waveshare */
+    slot.wp    = SDMMC_SLOT_NO_WP;
+    slot.flags |= SDMMC_SLOT_FLAG_INTERNAL_PULLUP;
+
+    err = esp_vfs_fat_sdmmc_mount(MOS_SD_MOUNT, &host, &slot, &mount_cfg, &s_sd_card);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "SD mount failed: %s (no card?)", esp_err_to_name(err));
+        sd_pwr_ctrl_del_on_chip_ldo(pwr_handle);
+        return -1;
+    }
+
+    s_sd_mounted = true;
+    ESP_LOGI(TAG, "SD FAT mounted at %s", MOS_SD_MOUNT);
+    sdmmc_card_print_info(stdout, s_sd_card);
+    return 0;
+}
+
+int mos_fs_remount_sd(void)
+{
+    if (s_sd_mounted) {
+        esp_vfs_fat_sdcard_unmount(MOS_SD_MOUNT, s_sd_card);
+        s_sd_mounted = false;
+        s_sd_card    = NULL;
+    }
+    return mos_fs_mount_sd();
+}
+
+#else  /* ESP32-S3 and others: SPI interface */
+
+/*
  * ESP32-S3 DevKit:
  *   MOSI=11, MISO=13, CLK=12, CS=10 (SPI2; GPIO 19/20 are USB D-/D+)
- *
- * ESP32-P4-Function-EV-Board:
- *   MOSI=8, MISO=9, CLK=43, CS=44 (adjust per actual board)
  */
 #ifndef MOS_SD_PIN_MOSI
-  #if CONFIG_IDF_TARGET_ESP32P4
-    #define MOS_SD_PIN_MOSI  8
-  #else
-    #define MOS_SD_PIN_MOSI  11
-  #endif
+  #define MOS_SD_PIN_MOSI  11
 #endif
 #ifndef MOS_SD_PIN_MISO
-  #if CONFIG_IDF_TARGET_ESP32P4
-    #define MOS_SD_PIN_MISO  9
-  #else
-    #define MOS_SD_PIN_MISO  13
-  #endif
+  #define MOS_SD_PIN_MISO  13
 #endif
 #ifndef MOS_SD_PIN_CLK
-  #if CONFIG_IDF_TARGET_ESP32P4
-    #define MOS_SD_PIN_CLK   43
-  #else
-    #define MOS_SD_PIN_CLK   12
-  #endif
+  #define MOS_SD_PIN_CLK   12
 #endif
 #ifndef MOS_SD_PIN_CS
-  #if CONFIG_IDF_TARGET_ESP32P4
-    #define MOS_SD_PIN_CS    44
-  #else
-    #define MOS_SD_PIN_CS    10
-  #endif
+  #define MOS_SD_PIN_CS    10
 #endif
 #define MOS_SD_SPI_HOST  SPI2_HOST
 
@@ -165,6 +224,8 @@ int mos_fs_remount_sd(void)
     }
     return mos_fs_mount_sd();
 }
+
+#endif /* CONFIG_IDF_TARGET_ESP32P4 */
 
 /* ------------------------------------------------------------------ */
 /* Status                                                               */
