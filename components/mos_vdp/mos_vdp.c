@@ -63,6 +63,10 @@ static volatile int      s_client_fd = -1;
 static volatile bool     s_connected = false;
 /* Disconnect flag — set by server task to wake a blocked getch() */
 static volatile bool     s_disconnecting = false;
+/* Abort flag — set by mos_vdp_abort() to stop a running user program.
+ * Makes getch() return -1 and putch() discard output.
+ * Cleared when the next client connects. */
+static volatile bool     s_abort = false;
 
 /* Binary semaphore signalled by proto_feed when a GP response arrives */
 static SemaphoreHandle_t s_gp_sem = NULL;
@@ -242,6 +246,7 @@ static void vdp_server_task(void *arg)
         s_client_fd     = fd;
         s_connected     = true;
         s_disconnecting = false;
+        s_abort         = false;   /* clear any previous abort request */
         xSemaphoreGive(s_sock_mu);
 
         xQueueReset(s_rx_queue);
@@ -348,6 +353,14 @@ bool mos_vdp_disconnecting(void)
     return s_disconnecting;
 }
 
+void mos_vdp_abort(void)
+{
+    s_abort = true;
+    /* Wake any task blocked in mos_vdp_getch() */
+    uint8_t wake = 0x00;
+    xQueueSendToFront(s_rx_queue, &wake, 0);
+}
+
 /* Flush the TX write buffer — sends all buffered bytes in one send() call.
  * Caller must NOT hold s_sock_mu. */
 void mos_vdp_flush(void)
@@ -375,8 +388,7 @@ void mos_vdp_flush(void)
 
 void mos_vdp_putch(uint8_t c)
 {
-    if (s_client_fd < 0) {
-        ESP_LOGD(TAG, "putch 0x%02x dropped (no client)", c);
+    if (s_client_fd < 0 || s_abort) {
         return;
     }
 
@@ -390,16 +402,20 @@ int mos_vdp_getch(void)
 {
     uint8_t byte;
     while (!s_connected) {
+        if (s_abort) return -1;
         vTaskDelay(pdMS_TO_TICKS(50));
     }
+    if (s_abort) return -1;
     /* Flush any pending TX bytes before blocking on input */
     mos_vdp_flush();
-    if (xQueueReceive(s_rx_queue, &byte, portMAX_DELAY) == pdTRUE) {
-        /* Wake byte sent on disconnect — check the flag */
-        if (s_disconnecting) return -1;
-        return (int)byte;
+    /* Poll queue in short intervals so we can detect abort mid-wait */
+    while (1) {
+        if (s_abort || s_disconnecting) return -1;
+        if (xQueueReceive(s_rx_queue, &byte, pdMS_TO_TICKS(50)) == pdTRUE) {
+            if (s_disconnecting || s_abort) return -1;
+            return (int)byte;
+        }
     }
-    return -1;
 }
 
 bool mos_vdp_kbhit(void)

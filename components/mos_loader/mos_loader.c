@@ -279,17 +279,17 @@ int mos_loader_exec(const char *path, int argc, char **argv)
     }
 
     /* Block until user program exits.
-     * Poll every 200 ms so we can detect VDP disconnection and abort the
-     * user program cleanly via mos_loader_exit_fn() → longjmp into user_task. */
+     * Poll every 200 ms so we can detect VDP disconnection.
+     * On disconnect, call mos_vdp_abort() which makes getch() return -1
+     * and putch() discard output — the user program will exit naturally
+     * on its next I/O call.  We then wait up to 2 s for it to finish.
+     * IMPORTANT: never longjmp from this task into user_task's stack. */
+    bool aborted = false;
     while (xSemaphoreTake(args.done, pdMS_TO_TICKS(200)) != pdTRUE) {
-        if (mos_vdp_disconnecting()) {
+        if (!aborted && mos_vdp_disconnecting()) {
             ESP_LOGW(TAG, "VDP disconnected — aborting user program");
-            mos_loader_exit_fn(-1);
-            /* mos_loader_exit_fn longjmps into user_task; if s_user_task_args
-             * is NULL (no program running) it spins — should not happen here.
-             * Wait a bit and then take the semaphore unconditionally. */
-            xSemaphoreTake(args.done, pdMS_TO_TICKS(500));
-            break;
+            mos_vdp_abort();
+            aborted = true;
         }
     }
     vSemaphoreDelete(args.done);

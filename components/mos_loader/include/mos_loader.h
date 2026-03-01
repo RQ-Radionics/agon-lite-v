@@ -42,8 +42,10 @@ int mos_loader_exec(const char *path, int argc, char **argv);
 /**
  * Terminate the currently running user program and return to the MOS shell.
  *
- * Implemented via longjmp back into user_task (which is still on the
- * FreeRTOS stack), so vTaskDelete runs normally afterwards.
+ * Implemented via longjmp back into user_task.  MUST only be called from
+ * within the user_task context (i.e. from the running user program itself,
+ * via mos->exit()).  Calling this from another task (e.g. the watchdog)
+ * causes a stack corruption crash — use mos_vdp_abort() instead.
  *
  * Registered as mos_api_table.exit so user programs can call mos->exit(n).
  * User programs must NOT call libc exit() / _exit() directly.

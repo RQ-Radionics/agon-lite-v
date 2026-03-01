@@ -50,6 +50,15 @@ bool mos_vdp_kbhit(void);
 bool mos_vdp_disconnecting(void);
 
 /**
+ * Signal the VDP layer to abort any blocked/running user program.
+ * After this call, mos_vdp_getch() returns -1 immediately and
+ * mos_vdp_putch() / mos_puts() discard output silently.
+ * The flag is cleared automatically when the next client connects.
+ * Safe to call from any task — does NOT longjmp.
+ */
+void mos_vdp_abort(void);
+
+/**
  * Flush the TX write buffer immediately.
  * mos_vdp_putch() accumulates bytes in a buffer and only calls send()
  * when the buffer is full.  Call mos_vdp_flush() to force a send of any
