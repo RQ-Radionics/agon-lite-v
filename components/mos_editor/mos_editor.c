@@ -71,6 +71,13 @@ void mos_editor_init(void)
     s_hist_head  = 0;
 }
 
+void mos_editor_reset(void)
+{
+    /* Clear history on session end so the next session starts clean */
+    s_hist_count = 0;
+    s_hist_head  = 0;
+}
+
 int mos_editor_readline(const char *prompt, char *buf, size_t buf_size)
 {
     if (!buf || buf_size < 2) return -1;

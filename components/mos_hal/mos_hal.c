@@ -83,8 +83,9 @@ int mos_getch(void)
 {
     if (mos_vdp_connected()) {
         int r = mos_vdp_getch();
-        /* If VDP disconnected mid-read, fall back to UART */
-        if (r < 0) return uart_getch();
+        /* -1 means VDP disconnected — propagate it, do NOT fall back to UART.
+         * The shell / editor will see -1 and return, allowing the session loop
+         * in main.c to wait for the next VDP connection. */
         return r;
     }
     return uart_getch();

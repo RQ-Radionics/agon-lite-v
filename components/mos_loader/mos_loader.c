@@ -32,6 +32,7 @@
 #include "mos_fs.h"
 #include "mos_api.h"
 #include "mos_api_table.h"
+#include "mos_vdp.h"
 
 static const char *TAG = "mos_loader";
 
@@ -279,8 +280,20 @@ int mos_loader_exec(const char *path, int argc, char **argv)
         return -1;
     }
 
-    /* Block until user program exits */
-    xSemaphoreTake(args.done, portMAX_DELAY);
+    /* Block until user program exits.
+     * Poll every 200 ms so we can detect VDP disconnection and abort the
+     * user program cleanly via mos_loader_exit_fn() → longjmp into user_task. */
+    while (xSemaphoreTake(args.done, pdMS_TO_TICKS(200)) != pdTRUE) {
+        if (mos_vdp_disconnecting()) {
+            ESP_LOGW(TAG, "VDP disconnected — aborting user program");
+            mos_loader_exit_fn(-1);
+            /* mos_loader_exit_fn longjmps into user_task; if s_user_task_args
+             * is NULL (no program running) it spins — should not happen here.
+             * Wait a bit and then take the semaphore unconditionally. */
+            xSemaphoreTake(args.done, pdMS_TO_TICKS(500));
+            break;
+        }
+    }
     vSemaphoreDelete(args.done);
     free(stack);
     free(tcb);

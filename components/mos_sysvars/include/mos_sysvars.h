@@ -103,6 +103,12 @@ extern t_mosSystemVariable *mosSystemVariables;
 void mos_sysvars_init(void);
 
 /* -----------------------------------------------------------------------
+ * Reset: free all user variables and re-register defaults.
+ * Called on VDP session end.
+ * ----------------------------------------------------------------------- */
+void mos_sysvars_reset(void);
+
+/* -----------------------------------------------------------------------
  * Core variable management
  * ----------------------------------------------------------------------- */
 int                    getSystemVariable(char *pattern, t_mosSystemVariable **var);

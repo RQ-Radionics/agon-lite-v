@@ -208,6 +208,10 @@ void app_main(void)
         /* Interactive shell - returns when VDP disconnects */
         mos_shell_run();
 
-        ESP_LOGI(TAG, "VDP client disconnected - waiting for next connection");
+        /* Session ended (VDP disconnected or EOF).
+         * Reset shell state so the next session starts with a clean slate:
+         * user variables freed, history cleared, cwd back to flash root. */
+        mos_shell_reset();
+        ESP_LOGI(TAG, "Session reset — waiting for next VDP connection");
     }
 }

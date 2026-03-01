@@ -43,4 +43,19 @@ int  mos_vdp_getch(void);
  */
 bool mos_vdp_kbhit(void);
 
+/**
+ * Returns true if the VDP has just disconnected and the session should end.
+ * Used by the loader to abort a running user program when the client drops.
+ */
+bool mos_vdp_disconnecting(void);
+
+/**
+ * Synchronise with the VDP: send a General Poll (VDU 23,0,&80,n) and
+ * block until the VDP echoes back the response packet.  This guarantees
+ * that all previously queued VDU bytes have been processed by the VDP
+ * before returning.  Equivalent to *FX 19 / WAIT_VBLANK on the Agon.
+ * Times out after 200 ms if no VDP is connected.
+ */
+void mos_vdp_sync(void);
+
 #endif /* MOS_VDP_H */

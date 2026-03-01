@@ -64,6 +64,11 @@ static volatile bool     s_connected = false;
 /* Disconnect flag — set by server task to wake a blocked getch() */
 static volatile bool     s_disconnecting = false;
 
+/* Binary semaphore signalled by proto_feed when a GP response arrives */
+static SemaphoreHandle_t s_gp_sem = NULL;
+/* Echo byte we sent in the last General Poll request */
+static volatile uint8_t  s_gp_echo = 0;
+
 /* ------------------------------------------------------------------ */
 /* VDP protocol parser                                                  */
 /* ------------------------------------------------------------------ */
@@ -126,7 +131,12 @@ static bool proto_feed(vdp_proto_t *p, uint8_t byte, uint8_t *out_ascii)
         if (p->received >= p->len) {
             /* Packet complete — handle it */
             bool got_key = false;
-            if (p->cmd == VDP_CMD_KEY && p->len >= 4) {
+            if (p->cmd == VDP_CMD_GP && p->len >= 1) {
+                /* General Poll response — signal any waiting vdp_sync() */
+                if (s_gp_sem && p->data[0] == s_gp_echo) {
+                    xSemaphoreGive(s_gp_sem);
+                }
+            } else if (p->cmd == VDP_CMD_KEY && p->len >= 4) {
                 uint8_t ascii   = p->data[0];
                 uint8_t mods    = p->data[1];
                 uint8_t vk      = p->data[2];
@@ -304,6 +314,12 @@ int mos_vdp_init(void)
         return -1;
     }
 
+    s_gp_sem = xSemaphoreCreateBinary();
+    if (!s_gp_sem) {
+        ESP_LOGE(TAG, "GP semaphore alloc failed");
+        return -1;
+    }
+
     BaseType_t ret = xTaskCreate(vdp_server_task, "vdp_srv",
                                  VDP_TASK_STACK_SZ, NULL,
                                  VDP_TASK_PRIO, NULL);
@@ -317,6 +333,11 @@ int mos_vdp_init(void)
 bool mos_vdp_connected(void)
 {
     return s_connected;
+}
+
+bool mos_vdp_disconnecting(void)
+{
+    return s_disconnecting;
 }
 
 void mos_vdp_putch(uint8_t c)
@@ -353,4 +374,33 @@ int mos_vdp_getch(void)
 bool mos_vdp_kbhit(void)
 {
     return (uxQueueMessagesWaiting(s_rx_queue) > 0);
+}
+
+void mos_vdp_sync(void)
+{
+    if (!s_connected || !s_gp_sem) {
+        /* No VDP — just yield briefly */
+        vTaskDelay(pdMS_TO_TICKS(20));
+        return;
+    }
+
+    /* Drain any stale GP signal from a previous call */
+    xSemaphoreTake(s_gp_sem, 0);
+
+    /* Send General Poll: VDU 23, 0, 0x80, echo */
+    static uint8_t echo_counter = 1;
+    s_gp_echo = echo_counter++;
+    if (echo_counter == 0) echo_counter = 1;  /* skip 0 */
+
+    uint8_t pkt[4] = { 0x17, 0x00, 0x80, s_gp_echo };
+    xSemaphoreTake(s_sock_mu, portMAX_DELAY);
+    int fd = s_client_fd;
+    xSemaphoreGive(s_sock_mu);
+
+    if (fd >= 0) {
+        send(fd, pkt, sizeof(pkt), 0);
+    }
+
+    /* Wait for the VDP to echo back — timeout 200 ms */
+    xSemaphoreTake(s_gp_sem, pdMS_TO_TICKS(200));
 }

@@ -12,6 +12,13 @@
 void mos_shell_init(void);
 
 /**
+ * Reset shell session state: clear system variables (except CODE vars),
+ * reset command history, reset cwd to flash root, reset nesting depth.
+ * Called when the VDP client disconnects so the next session starts clean.
+ */
+void mos_shell_reset(void);
+
+/**
  * Execute a single command line string.
  * Returns 0 on success, non-zero on error.
  */

@@ -14,4 +14,7 @@
 void mos_editor_init(void);
 int  mos_editor_readline(const char *prompt, char *buf, size_t buf_size);
 
+/** Clear the command history (called on session reset). */
+void mos_editor_reset(void);
+
 #endif /* MOS_EDITOR_H */

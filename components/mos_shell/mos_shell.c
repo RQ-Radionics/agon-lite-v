@@ -1382,6 +1382,27 @@ void mos_shell_init(void)
 }
 
 /* -------------------------------------------------------------------------
+ * mos_shell_reset — clean up after a VDP session ends
+ *
+ * Resets:
+ *   - Command nesting depth (s_depth)
+ *   - System variables (user vars freed, defaults re-registered)
+ *   - Editor history
+ *   - Current working directory → flash root
+ * ------------------------------------------------------------------------- */
+void mos_shell_reset(void)
+{
+    s_depth = 0;
+    mos_sysvars_reset();
+    mos_editor_reset();
+
+    /* Return to flash root so the next session always starts at A: */
+    char resolved[MOS_PATH_MAX];
+    mos_fs_resolve(MOS_FLASH_MOUNT, resolved, sizeof(resolved));
+    mos_fs_chdir(resolved);
+}
+
+/* -------------------------------------------------------------------------
  * mos_shell_exec  — public entry for single command execution
  * ------------------------------------------------------------------------- */
 int mos_shell_exec(const char *line)

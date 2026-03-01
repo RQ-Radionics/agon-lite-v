@@ -35,6 +35,26 @@ void mos_sysvars_init(void)
 }
 
 /* =========================================================================
+ * mos_sysvars_reset
+ * Free all user-set system variables and re-register defaults.
+ * Called on VDP session end so the next session starts with a clean slate.
+ * ========================================================================= */
+void mos_sysvars_reset(void)
+{
+    /* Walk the list, skipping CODE variables (they are static/permanent) */
+    t_mosSystemVariable *var = mosSystemVariables;
+    while (var) {
+        t_mosSystemVariable *next = var->next;
+        if (var->type != MOS_VAR_CODE) {
+            removeSystemVariable(var);
+        }
+        var = next;
+    }
+    /* Re-register built-in defaults */
+    mos_sysvars_init();
+}
+
+/* =========================================================================
  * getSystemVariable
  * Search for a variable matching pattern (case-insensitive, up to space).
  *
