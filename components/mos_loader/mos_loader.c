@@ -26,6 +26,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
+#include "freertos/idf_additions.h"
 #include <setjmp.h>
 
 #include "mos_loader.h"
@@ -257,25 +258,22 @@ int mos_loader_exec(const char *path, int argc, char **argv)
     /* Stack MUST be in internal DRAM — when the flash driver disables the
      * cache to read flash sectors, any task whose stack is in PSRAM (cached)
      * would be inaccessible, triggering esp_task_stack_is_sane_cache_disabled().
-     * TCB also goes in internal DRAM (FreeRTOS requirement). */
-    StackType_t  *stack = heap_caps_malloc(USER_TASK_STACK_SIZE, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    StaticTask_t *tcb   = heap_caps_malloc(sizeof(StaticTask_t), MALLOC_CAP_INTERNAL);
-    if (!stack || !tcb) {
-        ESP_LOGE(TAG, "Failed to allocate user task stack (%u KB)", USER_TASK_STACK_KB);
-        free(stack); free(tcb);
-        vSemaphoreDelete(args.done);
-        return -1;
-    }
-
-    TaskHandle_t task = xTaskCreateStatic(
+     *
+     * xTaskCreateWithCaps allocates TCB + stack internally using the given
+     * heap caps, and FreeRTOS owns their lifetime.  We call vTaskDeleteWithCaps
+     * after the semaphore to let FreeRTOS free them — never free them ourselves.
+     * This avoids the crash where free(tcb) races with prvCheckTasksWaitingTermination
+     * in the idle task still dereferencing the TCB after vTaskDelete(NULL). */
+    TaskHandle_t task = NULL;
+    BaseType_t created = xTaskCreateWithCaps(
         user_task, "user_prog",
         USER_TASK_STACK_SIZE / sizeof(StackType_t),
         &args,
         tskIDLE_PRIORITY + 5,
-        stack, tcb);
-    if (!task) {
-        ESP_LOGE(TAG, "xTaskCreateStatic failed");
-        free(stack); free(tcb);
+        &task,
+        MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (created != pdPASS || !task) {
+        ESP_LOGE(TAG, "xTaskCreateWithCaps failed (%u KB internal stack)", USER_TASK_STACK_KB);
         vSemaphoreDelete(args.done);
         return -1;
     }
@@ -295,8 +293,7 @@ int mos_loader_exec(const char *path, int argc, char **argv)
         }
     }
     vSemaphoreDelete(args.done);
-    free(stack);
-    free(tcb);
+    vTaskDeleteWithCaps(task);
 
     int ret = args.retval;
     ESP_LOGI(TAG, "'%s' exited %d", resolved, ret);
