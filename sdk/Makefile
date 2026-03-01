@@ -67,8 +67,8 @@ ASFLAGS = \
 
 LDFLAGS = \
     -T$(SDK_DIR)mos_user.ld \
-    -DMOS_EXEC_BASE=$(MOS_EXEC_BASE) \
-    -DMOS_DBUS_BASE=$(MOS_DBUS_BASE) \
+    -Wl,--defsym,MOS_EXEC_BASE=$(MOS_EXEC_BASE) \
+    -Wl,--defsym,MOS_DBUS_BASE=$(MOS_DBUS_BASE) \
     -nostdlib \
     -Wl,--gc-sections
 
