@@ -70,10 +70,12 @@ static inline void *dbus_to_ibus(const void *dbus_ptr)
 /* Entry point prototype for user programs */
 typedef int (*mos_entry_t)(int argc, char **argv, t_mos_api *mos);
 
-/* Stack size for user program task — 256 KB in PSRAM.
+/* Stack size for user program task — 64 KB in internal DRAM.
  * app_main stack (CONFIG_ESP_MAIN_TASK_STACK_SIZE) is only ~8-32 KB;
- * interpreters like BBC BASIC recurse deeply and need much more. */
-#define USER_TASK_STACK_KB   256
+ * interpreters like BBC BASIC recurse deeply and need much more.
+ * Must be in DRAM (not PSRAM): flash driver disables cache during reads,
+ * which makes PSRAM-backed stacks inaccessible → assert in cache_utils. */
+#define USER_TASK_STACK_KB   64
 #define USER_TASK_STACK_SIZE (USER_TASK_STACK_KB * 1024)
 
 typedef struct {
@@ -217,8 +219,11 @@ int mos_loader_exec(const char *path, int argc, char **argv)
         return -1;
     }
 
-    /* Allocate task stack in PSRAM */
-    StackType_t  *stack = heap_caps_malloc(USER_TASK_STACK_SIZE, MALLOC_CAP_SPIRAM);
+    /* Stack MUST be in internal DRAM — when the flash driver disables the
+     * cache to read flash sectors, any task whose stack is in PSRAM (cached)
+     * would be inaccessible, triggering esp_task_stack_is_sane_cache_disabled().
+     * TCB also goes in internal DRAM (FreeRTOS requirement). */
+    StackType_t  *stack = heap_caps_malloc(USER_TASK_STACK_SIZE, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     StaticTask_t *tcb   = heap_caps_malloc(sizeof(StaticTask_t), MALLOC_CAP_INTERNAL);
     if (!stack || !tcb) {
         ESP_LOGE(TAG, "Failed to allocate user task stack (%u KB)", USER_TASK_STACK_KB);
