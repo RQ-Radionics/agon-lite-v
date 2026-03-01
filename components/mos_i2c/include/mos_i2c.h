@@ -32,6 +32,9 @@
 #define MOS_I2C_H
 
 #include <stdint.h>
+#ifdef ESP_PLATFORM
+#  include "sdkconfig.h"   /* provides CONFIG_IDF_TARGET_ESP32P4 etc. */
+#endif
 
 /* ── Speed constants (compatible with original agon-mos i2c.h) ────────── */
 #define MOS_I2C_SPEED_57600   0x01   /*  57.6 kHz — standard mode  */

@@ -23,7 +23,7 @@ ifeq ($(TARGET),esp32p4)
   AS      = riscv32-esp-elf-gcc
   OBJCOPY = riscv32-esp-elf-objcopy
   OBJDUMP = riscv32-esp-elf-objdump
-  ARCH_FLAGS = -march=rv32imafc -mabi=ilp32f
+  ARCH_FLAGS = -march=rv32imafc -mabi=ilp32f -DCONFIG_IDF_TARGET_ESP32P4=1
   # ESP32-P4: unified PSRAM address space (DBUS == IBUS).
   # s_exec_arena is at 0x48000000 (from build/esp32-mos.map .ext_ram.bss)
   MOS_EXEC_BASE ?= 0x48000000
