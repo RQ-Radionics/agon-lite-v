@@ -412,6 +412,42 @@ t_mos_api *mos_api_table_get(void)
     return &s_mos_api_table;
 }
 
+/* ── VDP screen sysvars — read callbacks for MOS_VAR_CODE variables ─── */
+
+#define VDP_SYSVAR_READ(name, field, fmt)                           \
+static int vdp_read_##name(char *buf, int *len) {                   \
+    const mos_vdp_screen_t *s = mos_vdp_get_screen();              \
+    if (!s->valid) return -1;                                       \
+    int n = snprintf(buf, (size_t)*len, fmt, s->field);            \
+    if (n < 0 || n >= *len) return -1;                             \
+    *len = n;                                                       \
+    return 0;                                                       \
+}
+
+VDP_SYSVAR_READ(mode,    mode,    "%u")
+VDP_SYSVAR_READ(cols,    cols,    "%u")
+VDP_SYSVAR_READ(rows,    rows,    "%u")
+VDP_SYSVAR_READ(colours, colours, "%u")
+VDP_SYSVAR_READ(width,   width,   "%u")
+VDP_SYSVAR_READ(height,  height,  "%u")
+
+static t_mosCodeSystemVariable s_vdp_cv_mode    = { vdp_read_mode,    NULL };
+static t_mosCodeSystemVariable s_vdp_cv_cols    = { vdp_read_cols,    NULL };
+static t_mosCodeSystemVariable s_vdp_cv_rows    = { vdp_read_rows,    NULL };
+static t_mosCodeSystemVariable s_vdp_cv_colours = { vdp_read_colours, NULL };
+static t_mosCodeSystemVariable s_vdp_cv_width   = { vdp_read_width,   NULL };
+static t_mosCodeSystemVariable s_vdp_cv_height  = { vdp_read_height,  NULL };
+
+static void register_vdp_sysvars(void)
+{
+    createOrUpdateSystemVariable("VDP$Mode",    MOS_VAR_CODE, &s_vdp_cv_mode);
+    createOrUpdateSystemVariable("VDP$Cols",    MOS_VAR_CODE, &s_vdp_cv_cols);
+    createOrUpdateSystemVariable("VDP$Rows",    MOS_VAR_CODE, &s_vdp_cv_rows);
+    createOrUpdateSystemVariable("VDP$Colours", MOS_VAR_CODE, &s_vdp_cv_colours);
+    createOrUpdateSystemVariable("VDP$Width",   MOS_VAR_CODE, &s_vdp_cv_width);
+    createOrUpdateSystemVariable("VDP$Height",  MOS_VAR_CODE, &s_vdp_cv_height);
+}
+
 void mos_api_table_init(void)
 {
     t_mos_api *t = &s_mos_api_table;
@@ -469,6 +505,8 @@ void mos_api_table_init(void)
     t->vdp_sync     = mos_vdp_sync;
 
     t->exit         = NULL;  /* registered later via mos_api_set_exit_fn() */
+
+    register_vdp_sysvars();
 }
 
 void mos_api_set_exit_fn(void (*fn)(int status))

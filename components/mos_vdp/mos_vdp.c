@@ -56,6 +56,7 @@ static const char *TAG = "mos_vdp";
 /* VDP protocol command indices (header & 0x7F) */
 #define VDP_CMD_GP          0x00
 #define VDP_CMD_KEY         0x01
+#define VDP_CMD_MODE        0x06
 
 static QueueHandle_t     s_rx_queue  = NULL;
 static SemaphoreHandle_t s_sock_mu   = NULL;
@@ -77,6 +78,9 @@ static volatile uint8_t  s_gp_echo = 0;
 #define VDP_TX_BUF_SIZE  256
 static uint8_t  s_tx_buf[VDP_TX_BUF_SIZE];
 static int      s_tx_len = 0;
+
+/* Last screen information received from PACKET_MODE (cmd=0x06) */
+static mos_vdp_screen_t s_screen = { .valid = false };
 
 /* ------------------------------------------------------------------ */
 /* VDP protocol parser                                                  */
@@ -145,6 +149,21 @@ static bool proto_feed(vdp_proto_t *p, uint8_t byte, uint8_t *out_ascii)
                 if (s_gp_sem && p->data[0] == s_gp_echo) {
                     xSemaphoreGive(s_gp_sem);
                 }
+            } else if (p->cmd == VDP_CMD_MODE && p->len >= 8) {
+                /* Screen mode information (console8 payload order):
+                 *   [0..1] width  pixels LE   [2..3] height pixels LE
+                 *   [4]    cols              [5]    rows
+                 *   [6]    colours           [7]    mode number */
+                s_screen.width   = (uint16_t)(p->data[0] | (p->data[1] << 8));
+                s_screen.height  = (uint16_t)(p->data[2] | (p->data[3] << 8));
+                s_screen.cols    = p->data[4];
+                s_screen.rows    = p->data[5];
+                s_screen.colours = p->data[6];
+                s_screen.mode    = p->data[7];
+                s_screen.valid   = true;
+                ESP_LOGI(TAG, "MODE %u: %ux%u px, %ux%u chars, %u colours",
+                         s_screen.mode, s_screen.width, s_screen.height,
+                         s_screen.cols, s_screen.rows, s_screen.colours);
             } else if (p->cmd == VDP_CMD_KEY && p->len >= 4) {
                 uint8_t ascii   = p->data[0];
                 uint8_t mods    = p->data[1];
@@ -267,8 +286,13 @@ static void vdp_server_task(void *arg)
          * correct.  The important thing is that the client sees 0x17 first.
          */
         {
+            /* General Poll handshake: VDU 23,0,0x80,echo */
             uint8_t hs[4] = { 0x17, 0x00, 0x80, 0x00 };
             send(fd, hs, sizeof(hs), 0);
+            /* Request screen mode info: VDU 23,0,0x86
+             * VDP responds with PACKET_MODE (cmd=0x06, 8 bytes) immediately */
+            uint8_t req_mode[3] = { 0x17, 0x00, 0x86 };
+            send(fd, req_mode, sizeof(req_mode), 0);
         }
 
         /* Read and parse loop */
@@ -351,6 +375,11 @@ bool mos_vdp_connected(void)
 bool mos_vdp_disconnecting(void)
 {
     return s_disconnecting;
+}
+
+const mos_vdp_screen_t *mos_vdp_get_screen(void)
+{
+    return &s_screen;
 }
 
 void mos_vdp_abort(void)

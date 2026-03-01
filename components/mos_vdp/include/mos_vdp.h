@@ -17,6 +17,36 @@
 #define MOS_VDP_TCP_PORT    2323
 
 /**
+ * Screen information received from the VDP via PACKET_MODE (cmd=0x06).
+ * Sent by the VDP proactively on connect/mode-change, and on request
+ * via VDU 23,0,0x86.
+ *
+ * Payload byte order (console8 firmware):
+ *   [0..1] width    pixels, uint16 LE
+ *   [2..3] height   pixels, uint16 LE
+ *   [4]    cols     characters wide
+ *   [5]    rows     characters tall
+ *   [6]    colours  colour depth (log2 of number of colours)
+ *   [7]    mode     video mode number
+ */
+typedef struct {
+    uint16_t width;
+    uint16_t height;
+    uint8_t  cols;
+    uint8_t  rows;
+    uint8_t  colours;
+    uint8_t  mode;
+    bool     valid;   /* false until the first PACKET_MODE is received */
+} mos_vdp_screen_t;
+
+/**
+ * Return a pointer to the last screen information received from the VDP.
+ * The pointer is valid for the lifetime of the application.
+ * Check .valid before using the fields.
+ */
+const mos_vdp_screen_t *mos_vdp_get_screen(void);
+
+/**
  * Start the VDP TCP server task.
  * Must be called after WiFi is connected.
  * Returns 0 on success, -1 if the server socket cannot be created.
