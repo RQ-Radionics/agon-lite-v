@@ -495,15 +495,16 @@ static int do_DIR(const char *path_in, uint8_t flags)
                 char timebuf[20] = "                   ";
                 struct tm *t = localtime(&st.st_mtime);
                 if (t) strftime(timebuf, sizeof(timebuf), "%Y-%m-%d %H:%M:%S", t);
-                mos_printf("  %s  %-8s  %s\r\n",
-                           timebuf,
-                           is_dir ? "<DIR>" : "",
-                           entry->d_name);
-                if (!is_dir) {
-                    mos_printf("  %*s  %ld bytes\r\n", 19, "", (long)st.st_size);
+                if (is_dir) {
+                    mos_printf("  %s  %-8s           %s\r\n",
+                               timebuf, "<DIR>", entry->d_name);
+                } else {
+                    mos_printf("  %s  %-8s  %9ld  %s\r\n",
+                               timebuf, "", (long)st.st_size, entry->d_name);
                 }
             } else {
-                mos_printf("  %-19s  %-8s  %s\r\n", "?", is_dir ? "<DIR>" : "", entry->d_name);
+                mos_printf("  %-19s  %-8s  %9s  %s\r\n",
+                           "?", is_dir ? "<DIR>" : "", "?", entry->d_name);
             }
         } else {
             if (is_dir) {
