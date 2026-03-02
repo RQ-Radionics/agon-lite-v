@@ -1,0 +1,36 @@
+menu "MOS VDP Internal (HDMI framebuffer)"
+
+config MOS_VDP_INTERNAL_ENABLED
+    bool "Enable internal VDP (HDMI framebuffer renderer)"
+    default n
+    help
+        Enable the internal VDP component which renders Agon video commands
+        directly to an RGB888 framebuffer in PSRAM, outputting via the DPI
+        panel to the LT8912B HDMI bridge.
+
+        Requires CONFIG_LT8912B_ENABLED=y.
+
+if MOS_VDP_INTERNAL_ENABLED
+
+config MOS_VDP_INTERNAL_DEFAULT_MODE
+    int "Default video mode at startup"
+    default 0
+    range 0 3
+    help
+        Agon video mode to use at startup.
+          0 = 640x480, 16 colours, 80x60 chars (8x8 font)
+          1 = 512x384, 16 colours, 64x48 chars
+          2 = 320x200,  4 colours, 40x25 chars
+          3 = 640x480,  4 colours, 80x60 chars
+
+config MOS_VDP_INTERNAL_TASK_STACK_KB
+    int "Render task stack size (KB)"
+    default 16
+    range 8 64
+    help
+        Stack size for the VDP render task. The task processes VDU commands
+        and updates the framebuffer. Increase if you see stack overflow panics.
+
+endif # MOS_VDP_INTERNAL_ENABLED
+
+endmenu

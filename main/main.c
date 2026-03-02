@@ -43,16 +43,16 @@
 #include "mos_kbd.h"
 #endif
 
+#ifdef CONFIG_MOS_VDP_INTERNAL_ENABLED
+#include "mos_vdp_internal.h"
+#endif
+
 static const char *TAG = "esp32-mos";
 
 /* ------------------------------------------------------------------ */
-/* Keyboard scancode stub (Olimex ESP32-P4-PC)                         */
-/*                                                                      */
-/* Receives PS/2 Set 2 scancode bytes from mos_kbd and logs them at    */
-/* DEBUG level.  Will be replaced by mos_vdp_internal_send_scancode()  */
-/* when the internal VDP component (esp32-mos-hfq) is implemented.    */
+/* Keyboard scancode stub (fallback when internal VDP is disabled)     */
 /* ------------------------------------------------------------------ */
-#ifdef CONFIG_MOS_KBD_ENABLED
+#if defined(CONFIG_MOS_KBD_ENABLED) && !defined(CONFIG_MOS_VDP_INTERNAL_ENABLED)
 static void mos_kbd_scancode_stub(uint8_t byte)
 {
     ESP_LOGD(TAG, "KBD scancode: 0x%02X", byte);
@@ -61,9 +61,12 @@ static void mos_kbd_scancode_stub(uint8_t byte)
 
 /* ------------------------------------------------------------------ */
 /* HDMI output via LT8912B (Olimex ESP32-P4-PC only)                   */
+/*                                                                      */
+/* Returns the DPI panel handle so callers can access the framebuffer  */
+/* via esp_lcd_dpi_panel_get_frame_buffer().  Returns NULL on failure. */
 /* ------------------------------------------------------------------ */
 #ifdef CONFIG_LT8912B_ENABLED
-static void hdmi_init(void)
+static esp_lcd_panel_handle_t hdmi_init(void)
 {
     /* 1. Create MIPI DSI bus (2-lane, 350 Mbps, XTAL PLL source) */
     esp_lcd_dsi_bus_handle_t dsi_bus = NULL;
@@ -75,14 +78,14 @@ static void hdmi_init(void)
     };
     if (esp_lcd_new_dsi_bus(&bus_cfg, &dsi_bus) != ESP_OK) {
         ESP_LOGE(TAG, "HDMI: DSI bus init failed");
-        return;
+        return NULL;
     }
 
     /* 2. Patch: disable EoTP — LT8912B cannot handle it */
     if (esp_lcd_lt8912b_patch_dsi_eotp(dsi_bus) != ESP_OK) {
         ESP_LOGE(TAG, "HDMI: EoTP patch failed");
         esp_lcd_del_dsi_bus(dsi_bus);
-        return;
+        return NULL;
     }
 
     /* 3. Initialize LT8912B via I2C (programs all registers for 640x480@60Hz) */
@@ -96,18 +99,20 @@ static void hdmi_init(void)
     if (esp_lcd_lt8912b_init(&lt_cfg) != ESP_OK) {
         ESP_LOGE(TAG, "HDMI: LT8912B I2C init failed");
         esp_lcd_del_dsi_bus(dsi_bus);
-        return;
+        return NULL;
     }
 
     /* 4. Create DPI panel — feeds pixel data from ESP32-P4 to LT8912B DSI input.
      *    640x480 @ 25.175 MHz pixel clock, RGB888 (24-bit).
+     *    num_fbs=2: double-buffered so mos_vdp_internal can render to back buffer
+     *               while the DMA controller reads the front buffer.
      *    disable_lp=1: stay in HS mode during blanking (required for video mode). */
     esp_lcd_panel_handle_t panel = NULL;
     esp_lcd_dpi_panel_config_t dpi_cfg = {
         .dpi_clk_src         = MIPI_DSI_DPI_CLK_SRC_DEFAULT,
         .dpi_clock_freq_mhz  = 25,          /* 25 MHz ≈ 25.175; close enough for PLL */
         .pixel_format        = LCD_COLOR_PIXEL_FORMAT_RGB888,
-        .num_fbs             = 1,
+        .num_fbs             = 2,           /* double-buffered for tear-free rendering */
         .video_timing = {
             .h_size          = 640,
             .v_size          = 480,
@@ -124,7 +129,7 @@ static void hdmi_init(void)
         ESP_LOGE(TAG, "HDMI: DPI panel init failed");
         esp_lcd_lt8912b_deinit();
         esp_lcd_del_dsi_bus(dsi_bus);
-        return;
+        return NULL;
     }
 
     /* 5. Enable the panel */
@@ -133,6 +138,7 @@ static void hdmi_init(void)
 
     ESP_LOGI(TAG, "HDMI: 640x480@60Hz ready%s",
              esp_lcd_lt8912b_is_connected() ? " (cable connected)" : " (no cable)");
+    return panel;
 }
 #endif /* CONFIG_LT8912B_ENABLED */
 
@@ -238,9 +244,21 @@ static void mos_main_task(void *arg)
 
     /* 1b. HDMI output (Olimex ESP32-P4-PC only) — independent of VDP/network.
      *     Initializes DSI bus + LT8912B registers for 640x480@60Hz output.
+     *     Returns the DPI panel handle (double-buffered) for mos_vdp_internal.
      *     Non-fatal: if HDMI init fails, rest of the system continues normally. */
 #ifdef CONFIG_LT8912B_ENABLED
-    hdmi_init();
+    esp_lcd_panel_handle_t dpi_panel = hdmi_init();
+#else
+    esp_lcd_panel_handle_t dpi_panel = NULL;
+#endif
+
+    /* 1b2. Internal VDP — framebuffer renderer over HDMI (Olimex only).
+     *      Must come after hdmi_init() since it uses the DPI panel handle.
+     *      Non-fatal: if init fails, system continues (TCP VDP still works). */
+#ifdef CONFIG_MOS_VDP_INTERNAL_ENABLED
+    if (mos_vdp_internal_init(dpi_panel) != ESP_OK) {
+        ESP_LOGW(TAG, "Internal VDP init failed — continuing without HDMI output");
+    }
 #endif
 
     /* 1c. Audio codec (Olimex ESP32-P4-PC only) — ES8311 I2S+I2C, 16384 Hz mono.
@@ -254,12 +272,14 @@ static void mos_main_task(void *arg)
 
     /* 1d. USB HID keyboard (Olimex ESP32-P4-PC only) — PHY1 GPIO26/27, hub GPIO21.
      *     Produces PS/2 Set 2 scancodes delivered via callback.
-     *     Non-fatal: if keyboard init fails, rest of system continues normally.
-     *
-     *     TODO (esp32-mos-hfq): replace stub with mos_vdp_internal_send_scancode()
-     *     once the internal VDP component is implemented. */
+     *     When the internal VDP is enabled, scancodes go directly to it.
+     *     Non-fatal: if keyboard init fails, rest of system continues normally. */
 #ifdef CONFIG_MOS_KBD_ENABLED
+#  ifdef CONFIG_MOS_VDP_INTERNAL_ENABLED
+    if (mos_kbd_init(mos_vdp_internal_send_scancode) != ESP_OK) {
+#  else
     if (mos_kbd_init(mos_kbd_scancode_stub) != ESP_OK) {
+#  endif
         ESP_LOGW(TAG, "Keyboard init failed — continuing without keyboard");
     }
 #endif

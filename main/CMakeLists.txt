@@ -18,4 +18,5 @@ idf_component_register(
         esp_lcd_lt8912b
         mos_audio
         mos_kbd
+        mos_vdp_internal
 )
