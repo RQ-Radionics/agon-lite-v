@@ -117,26 +117,21 @@ static void print_banner(void)
 
 static void mos_main_task(void *arg)
 {
-    /* 0. NVS - must be initialised before WiFi */
-    esp_err_t nvs_err = nvs_flash_init();
-    if (nvs_err == ESP_ERR_NVS_NO_FREE_PAGES ||
-        nvs_err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-        nvs_flash_erase();
-        nvs_err = nvs_flash_init();
-    }
-    if (nvs_err != ESP_OK) {
-        ESP_LOGE(TAG, "NVS init failed: 0x%x", nvs_err);
-    }
+    /* Steps 0-2 (NVS + flash FAT) were done in app_main with LP DRAM stack.
+     * Any SPI flash access (esp_partition, nvs_flash_init, vfs_fat_spiflash)
+     * requires the calling task's stack to be in LP DRAM (passes
+     * esp_task_stack_is_sane_cache_disabled). PSRAM stacks fail that check.
+     * app_main passes the flash-mount result as (intptr_t)arg. */
 
     /* 1. Console */
     mos_hal_console_init();
 
-    /* 2. Mount flash FAT */
-    if (mos_fs_mount_flash() != 0) {
-        ESP_LOGE(TAG, "Fatal: cannot mount flash FAT");
+    /* 2. (Done in app_main) — report flash result */
+    if ((intptr_t)arg != 0) {
+        ESP_LOGE(TAG, "Flash FAT mount failed in app_main");
     }
 
-    /* 3. Mount SD card (optional) */
+    /* 3. Mount SD card (optional — SD uses SDMMC, not SPI flash cache path) */
     if (mos_fs_mount_sd() != 0) {
         ESP_LOGW(TAG, "SD card not available");
     }
@@ -246,23 +241,49 @@ static void mos_main_task(void *arg)
 }
 
 /* ------------------------------------------------------------------ */
-/* app_main — minimal launcher; immediately spawns mos_main_task with  */
-/* a large PSRAM stack to avoid stack overflow on RISC-V ESP32-P4      */
-/* where each call frame is much larger than on Xtensa.               */
+/* app_main — runs on the FreeRTOS main task (stack in LP DRAM).       */
+/*                                                                      */
+/* SPI flash operations (nvs_flash_init, esp_vfs_fat_spiflash_mount)   */
+/* assert that the calling task's stack is in LP DRAM via              */
+/* esp_task_stack_is_sane_cache_disabled().  PSRAM stacks fail this.   */
+/* So we do all flash-touching init HERE, then spawn mos_main_task     */
+/* with a large PSRAM stack for the rest (Ethernet, shell, etc.).      */
 /* ------------------------------------------------------------------ */
 void app_main(void)
 {
-    /* Allocate stack in PSRAM so internal SRAM isn't exhausted. */
-    StaticTask_t *tcb = heap_caps_malloc(sizeof(StaticTask_t), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    StackType_t  *stack = heap_caps_malloc(MOS_MAIN_STACK_KB * 1024, MALLOC_CAP_SPIRAM);
+    /* 0. NVS — must be done before WiFi and before spawning PSRAM task */
+    esp_err_t nvs_err = nvs_flash_init();
+    if (nvs_err == ESP_ERR_NVS_NO_FREE_PAGES ||
+        nvs_err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        nvs_flash_erase();
+        nvs_err = nvs_flash_init();
+    }
+    if (nvs_err != ESP_OK) {
+        ESP_LOGE(TAG, "NVS init failed: 0x%x", nvs_err);
+    }
+
+    /* 1. Mount flash FAT — uses esp_partition / spi_flash (needs DRAM stack) */
+    int flash_ok = mos_fs_mount_flash();
+    if (flash_ok != 0) {
+        ESP_LOGE(TAG, "Flash FAT mount failed");
+    }
+
+    /* 2. Spawn mos_main_task with a large PSRAM stack.
+     *    TCB must be in internal RAM (LP DRAM); stack can be PSRAM since
+     *    no further SPI flash cache ops occur from that task context.    */
+    StaticTask_t *tcb   = heap_caps_malloc(sizeof(StaticTask_t),
+                                           MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    StackType_t  *stack = heap_caps_malloc(MOS_MAIN_STACK_KB * 1024,
+                                           MALLOC_CAP_SPIRAM);
 
     if (!tcb || !stack) {
-        /* Last-resort: fall back to dynamic allocation from any available RAM */
-        ESP_LOGE("app_main", "PSRAM stack alloc failed — falling back to xTaskCreate");
-        xTaskCreate(mos_main_task, "mos_main", MOS_MAIN_STACK_KB * 1024, NULL, 5, NULL);
+        ESP_LOGE(TAG, "PSRAM stack alloc failed — falling back to xTaskCreate");
+        xTaskCreate(mos_main_task, "mos_main", MOS_MAIN_STACK_KB * 1024,
+                    (void *)(intptr_t)flash_ok, 5, NULL);
     } else {
         xTaskCreateStatic(mos_main_task, "mos_main",
-                          MOS_MAIN_STACK_KB * 1024, NULL, 5,
-                          stack, tcb);
+                          MOS_MAIN_STACK_KB * 1024,
+                          (void *)(intptr_t)flash_ok,
+                          5, stack, tcb);
     }
 }
