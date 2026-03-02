@@ -33,6 +33,7 @@
  */
 
 #include <string.h>
+#include <stddef.h>
 #include <errno.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -56,7 +57,13 @@ static const char *TAG = "mos_vdp";
 /* VDP protocol command indices (header & 0x7F) */
 #define VDP_CMD_GP          0x00
 #define VDP_CMD_KEY         0x01
+#define VDP_CMD_CURSOR      0x02
+#define VDP_CMD_SCRCHAR     0x03
+#define VDP_CMD_SCRPIXEL    0x04
+#define VDP_CMD_AUDIO       0x05
 #define VDP_CMD_MODE        0x06
+#define VDP_CMD_RTC         0x07
+#define VDP_CMD_KEYSTATE    0x08
 
 static QueueHandle_t     s_rx_queue  = NULL;
 static SemaphoreHandle_t s_sock_mu   = NULL;
@@ -84,6 +91,34 @@ static int      s_tx_len = 0;
 
 /* Last screen information received from PACKET_MODE (cmd=0x06) */
 static mos_vdp_screen_t s_screen = { .valid = false };
+
+/* Binary sysvar block — agon-mos compatible layout, updated by VDP packets */
+static t_mos_sysvars s_sysvars = { 0 };
+
+/* Compile-time offset checks against agon-mos sysvar_* constants */
+_Static_assert(offsetof(t_mos_sysvars, time)          == 0x00, "sysvar_time");
+_Static_assert(offsetof(t_mos_sysvars, vpd_pflags)    == 0x04, "sysvar_vpd_pflags");
+_Static_assert(offsetof(t_mos_sysvars, keyascii)      == 0x05, "sysvar_keyascii");
+_Static_assert(offsetof(t_mos_sysvars, keymods)       == 0x06, "sysvar_keymods");
+_Static_assert(offsetof(t_mos_sysvars, cursorX)       == 0x07, "sysvar_cursorX");
+_Static_assert(offsetof(t_mos_sysvars, cursorY)       == 0x08, "sysvar_cursorY");
+_Static_assert(offsetof(t_mos_sysvars, scrchar)       == 0x09, "sysvar_scrchar");
+_Static_assert(offsetof(t_mos_sysvars, scrpixel)      == 0x0A, "sysvar_scrpixel");
+_Static_assert(offsetof(t_mos_sysvars, audioChannel)  == 0x0D, "sysvar_audioChannel");
+_Static_assert(offsetof(t_mos_sysvars, audioSuccess)  == 0x0E, "sysvar_audioSuccess");
+_Static_assert(offsetof(t_mos_sysvars, scrWidth)      == 0x0F, "sysvar_scrWidth");
+_Static_assert(offsetof(t_mos_sysvars, scrHeight)     == 0x11, "sysvar_scrHeight");
+_Static_assert(offsetof(t_mos_sysvars, scrCols)       == 0x13, "sysvar_scrCols");
+_Static_assert(offsetof(t_mos_sysvars, scrRows)       == 0x14, "sysvar_scrRows");
+_Static_assert(offsetof(t_mos_sysvars, scrColours)    == 0x15, "sysvar_scrColours");
+_Static_assert(offsetof(t_mos_sysvars, scrpixelIndex) == 0x16, "sysvar_scrpixelIndex");
+_Static_assert(offsetof(t_mos_sysvars, vkeycode)      == 0x17, "sysvar_vkeycode");
+_Static_assert(offsetof(t_mos_sysvars, vkeydown)      == 0x18, "sysvar_vkeydown");
+_Static_assert(offsetof(t_mos_sysvars, vkeycount)     == 0x19, "sysvar_vkeycount");
+_Static_assert(offsetof(t_mos_sysvars, rtc)           == 0x1A, "sysvar_rtc");
+_Static_assert(offsetof(t_mos_sysvars, keydelay)      == 0x20, "sysvar_keydelay");
+_Static_assert(offsetof(t_mos_sysvars, keyrate)       == 0x22, "sysvar_keyrate");
+_Static_assert(offsetof(t_mos_sysvars, keyled)        == 0x24, "sysvar_keyled");
 
 /* ------------------------------------------------------------------ */
 /* VDP protocol parser                                                  */
@@ -152,6 +187,26 @@ static bool proto_feed(vdp_proto_t *p, uint8_t byte, uint8_t *out_ascii)
                 if (s_gp_sem && p->data[0] == s_gp_echo) {
                     xSemaphoreGive(s_gp_sem);
                 }
+            } else if (p->cmd == VDP_CMD_CURSOR && p->len >= 2) {
+                /* Cursor position: x, y */
+                s_sysvars.cursorX = p->data[0];
+                s_sysvars.cursorY = p->data[1];
+            } else if (p->cmd == VDP_CMD_SCRCHAR && p->len >= 1) {
+                /* Character at cursor */
+                s_sysvars.scrchar = p->data[0];
+                s_sysvars.vpd_pflags |= 0x02; /* vdp_pflag_scrchar */
+            } else if (p->cmd == VDP_CMD_SCRPIXEL && p->len >= 4) {
+                /* Pixel R, G, B, palette index */
+                s_sysvars.scrpixel[0]  = p->data[0]; /* R */
+                s_sysvars.scrpixel[1]  = p->data[1]; /* G */
+                s_sysvars.scrpixel[2]  = p->data[2]; /* B */
+                s_sysvars.scrpixelIndex = p->data[3];
+                s_sysvars.vpd_pflags |= 0x04; /* vdp_pflag_point */
+            } else if (p->cmd == VDP_CMD_AUDIO && p->len >= 1) {
+                /* Audio channel done */
+                s_sysvars.audioChannel = p->data[0];
+                s_sysvars.audioSuccess = 1;
+                s_sysvars.vpd_pflags |= 0x08; /* vdp_pflag_audio */
             } else if (p->cmd == VDP_CMD_MODE && p->len >= 8) {
                 /* Screen mode information (console8 payload order):
                  *   [0..1] width  pixels LE   [2..3] height pixels LE
@@ -164,11 +219,27 @@ static bool proto_feed(vdp_proto_t *p, uint8_t byte, uint8_t *out_ascii)
                 s_screen.colours = p->data[6];
                 s_screen.mode    = p->data[7];
                 s_screen.valid   = true;
+                /* Mirror into sysvar block */
+                s_sysvars.scrWidth   = s_screen.width;
+                s_sysvars.scrHeight  = s_screen.height;
+                s_sysvars.scrCols    = s_screen.cols;
+                s_sysvars.scrRows    = s_screen.rows;
+                s_sysvars.scrColours = s_screen.colours;
+                s_sysvars.vpd_pflags |= 0x10; /* vdp_pflag_mode */
                 ESP_LOGI(TAG, "MODE %u: %ux%u px, %ux%u chars, %u colours",
                          s_screen.mode, s_screen.width, s_screen.height,
                          s_screen.cols, s_screen.rows, s_screen.colours);
                 /* Wake any task blocked in mos_vdp_request_mode() */
                 if (s_mode_sem) xSemaphoreGive(s_mode_sem);
+            } else if (p->cmd == VDP_CMD_RTC && p->len >= 6) {
+                /* Packed RTC: 6 bytes verbatim from vdp_time_t union */
+                memcpy(s_sysvars.rtc, p->data, 6);
+                s_sysvars.vpd_pflags |= 0x20; /* vdp_pflag_rtc */
+            } else if (p->cmd == VDP_CMD_KEYSTATE && p->len >= 5) {
+                /* Keyboard state: delay(16le), rate(16le), ledState */
+                s_sysvars.keydelay = (uint16_t)(p->data[0] | (p->data[1] << 8));
+                s_sysvars.keyrate  = (uint16_t)(p->data[2] | (p->data[3] << 8));
+                s_sysvars.keyled   = p->data[4];
             } else if (p->cmd == VDP_CMD_KEY && p->len >= 4) {
                 uint8_t ascii   = p->data[0];
                 uint8_t mods    = p->data[1];
@@ -176,7 +247,13 @@ static bool proto_feed(vdp_proto_t *p, uint8_t byte, uint8_t *out_ascii)
                 uint8_t keydown = p->data[3];
                 ESP_LOGD(TAG, "KEY ascii=0x%02x mods=0x%02x vk=0x%02x down=%d",
                          ascii, mods, vk, keydown);
+                /* Update sysvar block for every key event (up or down) */
+                s_sysvars.vkeycode = vk;
+                s_sysvars.vkeydown = keydown;
+                s_sysvars.vkeycount++;
                 if (keydown) {
+                    s_sysvars.keyascii = ascii;
+                    s_sysvars.keymods  = mods;
                     /* Some keys arrive with ascii=0 — map via vkeycode */
                     if (ascii == 0) {
                         switch (vk) {
@@ -189,6 +266,8 @@ static bool proto_feed(vdp_proto_t *p, uint8_t byte, uint8_t *out_ascii)
                         *out_ascii = ascii;
                         got_key = true;
                     }
+                } else {
+                    s_sysvars.keyascii = 0;
                 }
             }
             proto_reset(p);
@@ -391,6 +470,11 @@ bool mos_vdp_disconnecting(void)
 const mos_vdp_screen_t *mos_vdp_get_screen(void)
 {
     return &s_screen;
+}
+
+t_mos_sysvars *mos_vdp_get_sysvars(void)
+{
+    return &s_sysvars;
 }
 
 void mos_vdp_abort(void)

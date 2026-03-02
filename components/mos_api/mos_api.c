@@ -479,6 +479,7 @@ void mos_api_table_init(void)
 
     t->setvariable = mos_api_setvariable;
     t->getvariable = mos_api_getvariable;
+    t->sysvars     = mos_vdp_get_sysvars;
 
     t->oscli      = mos_api_oscli;
 

@@ -22,6 +22,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include "mos_vdp.h"   /* t_mos_sysvars */
 
 /* Magic value at offset 0 — lets user code verify the table is present */
 #define MOS_API_MAGIC   0x4D4F5301UL   /* 'MOS\x01' */
@@ -67,6 +68,10 @@ typedef struct {
     /* --- system variables --- */
     int      (*setvariable)(const char *name, const char *value);
     int      (*getvariable)(const char *name, char *buf, size_t len);
+    /* Return pointer to the live binary sysvar block (agon-mos compatible).
+     * Fields are updated in-place as VDP packets arrive.
+     * Cast to t_mos_sysvars* or index by sysvar_* byte offsets. */
+    t_mos_sysvars *(*sysvars)(void);
 
     /* --- OSCLI --- */
     int      (*oscli)(const char *cmd);
