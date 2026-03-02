@@ -106,4 +106,15 @@ void mos_vdp_flush(void);
  */
 void mos_vdp_sync(void);
 
+/**
+ * Request current screen information from the VDP: sends VDU 23,0,0x86
+ * and blocks until the VDP responds with PACKET_MODE, updating the struct
+ * returned by mos_vdp_get_screen().  Times out after 200 ms.
+ *
+ * Use this instead of vdp_sync() when you need up-to-date screen info
+ * (e.g. after a MODE change), because vdp_sync() only waits for a GP
+ * response and the MODE packet may arrive after it returns.
+ */
+void mos_vdp_request_mode(void);
+
 #endif /* MOS_VDP_H */

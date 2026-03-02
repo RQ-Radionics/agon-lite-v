@@ -23,7 +23,7 @@
  *     0x03  SCRCHAR   [1 byte]  char at cursor
  *     0x04  POINT     [3 bytes] r,g,b
  *     0x05  AUDIO     [1 byte]  channel done
- *     0x06  MODE      [7 bytes] screen info
+ *     0x06  MODE      [8 bytes] width(16le), height(16le), cols, rows, colours, mode
  *     0x07  RTC       [6 bytes] time fields
  *     0x08  KEYSTATE  [2 bytes] virtual key, state
  *     0x09  MOUSE     [6 bytes] mouse data
@@ -73,6 +73,9 @@ static volatile bool     s_abort = false;
 static SemaphoreHandle_t s_gp_sem = NULL;
 /* Echo byte we sent in the last General Poll request */
 static volatile uint8_t  s_gp_echo = 0;
+
+/* Binary semaphore signalled by proto_feed when a PACKET_MODE arrives */
+static SemaphoreHandle_t s_mode_sem = NULL;
 
 /* TX write buffer — coalesces single-byte putch() calls */
 #define VDP_TX_BUF_SIZE  256
@@ -164,6 +167,8 @@ static bool proto_feed(vdp_proto_t *p, uint8_t byte, uint8_t *out_ascii)
                 ESP_LOGI(TAG, "MODE %u: %ux%u px, %ux%u chars, %u colours",
                          s_screen.mode, s_screen.width, s_screen.height,
                          s_screen.cols, s_screen.rows, s_screen.colours);
+                /* Wake any task blocked in mos_vdp_request_mode() */
+                if (s_mode_sem) xSemaphoreGive(s_mode_sem);
             } else if (p->cmd == VDP_CMD_KEY && p->len >= 4) {
                 uint8_t ascii   = p->data[0];
                 uint8_t mods    = p->data[1];
@@ -357,6 +362,12 @@ int mos_vdp_init(void)
         return -1;
     }
 
+    s_mode_sem = xSemaphoreCreateBinary();
+    if (!s_mode_sem) {
+        ESP_LOGE(TAG, "MODE semaphore alloc failed");
+        return -1;
+    }
+
     BaseType_t ret = xTaskCreate(vdp_server_task, "vdp_srv",
                                  VDP_TASK_STACK_SZ, NULL,
                                  VDP_TASK_PRIO, NULL);
@@ -482,4 +493,31 @@ void mos_vdp_sync(void)
 
     /* Wait for the VDP to echo back — timeout 200 ms */
     xSemaphoreTake(s_gp_sem, pdMS_TO_TICKS(200));
+}
+
+void mos_vdp_request_mode(void)
+{
+    if (!s_connected || !s_mode_sem) {
+        vTaskDelay(pdMS_TO_TICKS(20));
+        return;
+    }
+
+    /* Flush any pending TX bytes so 0x86 arrives at the VDP in order */
+    mos_vdp_flush();
+
+    /* Drain any stale MODE signal from a previous call */
+    xSemaphoreTake(s_mode_sem, 0);
+
+    /* Send VDU 23,0,0x86 — VDP responds with PACKET_MODE (cmd=0x06) */
+    uint8_t pkt[3] = { 0x17, 0x00, 0x86 };
+    xSemaphoreTake(s_sock_mu, portMAX_DELAY);
+    int fd = s_client_fd;
+    xSemaphoreGive(s_sock_mu);
+
+    if (fd >= 0) {
+        send(fd, pkt, sizeof(pkt), 0);
+    }
+
+    /* Wait for PACKET_MODE — timeout 200 ms */
+    xSemaphoreTake(s_mode_sem, pdMS_TO_TICKS(200));
 }

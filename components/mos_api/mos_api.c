@@ -502,7 +502,8 @@ void mos_api_table_init(void)
     t->i2c_write    = mos_api_i2c_write;
     t->i2c_read     = mos_api_i2c_read;
 
-    t->vdp_sync     = mos_vdp_sync;
+    t->vdp_sync         = mos_vdp_sync;
+    t->vdp_request_mode = mos_vdp_request_mode;
 
     t->exit         = NULL;  /* registered later via mos_api_set_exit_fn() */
 

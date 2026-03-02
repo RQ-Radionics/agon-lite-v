@@ -103,6 +103,11 @@ typedef struct {
      * the VDP before BASIC continues — equivalent to *FX 19 on the Agon. */
     void     (*vdp_sync)(void);
 
+    /* Request up-to-date screen info from the VDP: sends VDU 23,0,0x86 and
+     * blocks until the VDP responds with PACKET_MODE.  After this call,
+     * getvariable("VDP$Mode") etc. return current values.  Times out 200 ms. */
+    void     (*vdp_request_mode)(void);
+
     /* --- program exit --- */
     /* Terminate the current user program and return to the MOS shell.
      * Implemented by the loader via longjmp inside the user_task frame.
