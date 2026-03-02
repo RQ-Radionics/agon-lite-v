@@ -228,3 +228,114 @@ Conector de 2×10 pines con GPIOs libres + +3.3V + +5V + GND.
 | USER_LED    | GPIO2      | Verde — uso libre |
 | PWR_LED     | +3.3V      | Rojo — alimentación presente |
 | CHARGE_LED  | CHRGb del TP4054 | Amarillo — cargando batería |
+
+---
+
+## Notas de implementación IDF (drivers confirmados)
+
+### USB PHY — dos PHYs independientes, NO intercambiables
+
+| PHY | Velocidad | GPIOs | Uso en esta placa |
+|-----|-----------|-------|-------------------|
+| PHY0 (USB11 HS) | High-Speed | GPIO24 (D-), GPIO25 (D+) | USB-JTAG/CDC (USB-C) — NO tocar |
+| PHY1 (OTG11 FS) | Full-Speed  | GPIO26 (D-), GPIO27 (D+) | FE1.1s hub → teclado USB |
+
+En `usb_host_config_t` el campo **`peripheral_map`** selecciona el PHY:
+- `BIT(0)` → PHY0 (HS, USB-JTAG) — rompe la consola
+- `BIT(1)` → PHY1 (FS, OTG11) — correcto para el hub
+
+```c
+const usb_host_config_t host_config = {
+    .skip_phy_setup = false,
+    .peripheral_map = BIT(1),   /* PHY1 = OTG11 FS, GPIO26/27 */
+    .intr_flags     = ESP_INTR_FLAG_LEVEL1,
+};
+```
+
+### FE1.1s USB Hub — secuencia de arranque
+
+1. Configurar GPIO21 como salida
+2. Poner GPIO21 = 0 (assert reset, ≥ 10 ms)
+3. Poner GPIO21 = 1 (deassert reset)
+4. Esperar ≥ 100 ms (enumeración del hub)
+5. Llamar a `usb_host_install()`
+
+Kconfig necesario:
+```
+CONFIG_USB_HOST_HUBS_SUPPORTED=y
+CONFIG_USB_HOST_HUB_MULTI_LEVEL=y
+```
+
+### mos_kbd — managed component
+
+`espressif/usb_host_hid ^1.1.0` debe declararse en `main/idf_component.yml`.
+En el `CMakeLists.txt` del componente que lo usa, **debe ir en `PRIV_REQUIRES`**
+(no en `REQUIRES`) porque los headers solo se necesitan internamente:
+
+```cmake
+idf_component_register(
+    SRCS "mos_kbd.c"
+    INCLUDE_DIRS "include"
+    REQUIRES     driver log freertos usb
+    PRIV_REQUIRES espressif__usb_host_hid
+)
+```
+
+IDF 5.x valida esto en tiempo de configuración y falla con error claro si se pone
+en `REQUIRES` cuando los headers no son públicos.
+
+El callback de dispositivo (`hid_host_device_callback`) se invoca desde la tarea
+de fondo del driver HID — **no desde una ISR** — por lo que es seguro llamar a
+`hid_host_device_open()`, `hid_class_request_set_protocol()`, etc. directamente
+dentro del callback sin necesidad de una cola intermedia.
+
+### ES8311 Audio Codec — secuencia de encendido
+
+1. Configurar GPIO6 como salida, nivel 0 (CODEC_PWR_DIS# activo LOW = codec encendido)
+2. Esperar ≥ 10 ms (estabilización del LDO analógico +3.3VA)
+3. Inicializar I2C0 (GPIO7 SDA, GPIO8 SCL)
+4. Inicializar I2S0 con APLL, 16384 Hz, mono
+5. Escribir registros ES8311 (clock, ADC/DAC, volumen)
+
+Dirección I2C: **0x18** (pin CE/AD0 conectado a GND en el esquemático).
+
+No usar `esp_codec_dev` — no está disponible como componente local en IDF 5.5.
+Usar registros directos del ES8311 (ver `components/mos_audio/mos_audio.c`).
+
+### LT8912B HDMI — EoTP conflict
+
+El header `mipi_dsi_priv.h` del IDF define `#define TAG "lcd.dsi"`, lo que
+conflicta con cualquier `static const char *TAG` en el mismo fichero `.c`.
+
+**Solución**: separar la función que incluye `mipi_dsi_priv.h` en un fichero `.c`
+independiente (ver `components/esp_lcd_lt8912b/esp_lcd_lt8912b_eotp.c`).
+
+Parámetros DSI para 640×480@60 Hz con LT8912B:
+- Lanes: 2
+- Lane bit rate: 350 Mbps
+- Pixel clock: 25 MHz (≈ 25.175 MHz nativo de VGA)
+- `flags.disable_lp = 1` (stay in HS mode durante blanking — requerido por LT8912B)
+
+### Nombres de componentes IDF 5.x
+
+Algunos nombres de componentes cambiaron respecto a IDF 4.x:
+
+| IDF 4.x | IDF 5.x |
+|---------|---------|
+| `esp_log` | `log` |
+| `driver` (monolítico) | `driver` + `esp_driver_gpio`, `esp_driver_i2c`, `esp_driver_i2s`, etc. |
+| `esp_check` (inexistente) | parte de `esp_common` |
+
+Para drivers de audio/I2S usar `esp_driver_i2s`; para I2C usar `esp_driver_i2c`.
+
+### Stack de la tarea principal en RISC-V
+
+En RISC-V (ESP32-P4) el ABI consume más stack que en Xtensa:
+`vfprintf` + `esp_netif_init` + Ethernet pueden llegar a ~80-100 KB combinados.
+
+**96 KB** resultó insuficiente (SP underflow de 36 bytes en `mos_hal_console_init`).
+**192 KB** (PSRAM) es el valor confirmado en esta placa.
+
+Las operaciones sobre Flash SPI (`nvs_flash_init`, `esp_vfs_fat_spiflash_mount`)
+requieren que la pila de la tarea llamante esté en **LP DRAM** (no en PSRAM).
+Por eso `app_main` hace esas operaciones antes de lanzar `mos_main_task` con pila en PSRAM.
