@@ -16,4 +16,5 @@ idf_component_register(
         mos_sntp
         mos_vdp
         esp_lcd_lt8912b
+        mos_audio
 )

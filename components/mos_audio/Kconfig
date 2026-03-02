@@ -1,0 +1,95 @@
+menu "MOS Audio (ES8311 codec)"
+    depends on IDF_TARGET_ESP32P4
+
+    config MOS_AUDIO_ENABLED
+        bool "Enable ES8311 audio codec driver"
+        default n
+        help
+            Enable the ES8311 I2S/I2C audio codec driver.
+            Required for audio output/input on boards with an ES8311 chip
+            (e.g. Olimex ESP32-P4-PC).
+
+    if MOS_AUDIO_ENABLED
+
+    config MOS_AUDIO_I2C_PORT
+        int "I2C port number for ES8311"
+        default 0
+        range 0 1
+        help
+            I2C port used to configure the ES8311 (address 0x18).
+            Olimex ESP32-P4-PC uses I2C_NUM_0 (port 0), GPIO7/8.
+
+    config MOS_AUDIO_I2C_SDA_GPIO
+        int "I2C SDA GPIO for ES8311"
+        default 7
+        help
+            GPIO for I2C SDA to the ES8311. Olimex ESP32-P4-PC: GPIO7.
+
+    config MOS_AUDIO_I2C_SCL_GPIO
+        int "I2C SCL GPIO for ES8311"
+        default 8
+        help
+            GPIO for I2C SCL to the ES8311. Olimex ESP32-P4-PC: GPIO8.
+
+    config MOS_AUDIO_PWR_GPIO
+        int "Codec power-enable GPIO (active LOW, -1 to disable)"
+        default 6
+        range -1 56
+        help
+            GPIO to power-enable the codec. Drive LOW to power on.
+            Olimex ESP32-P4-PC: GPIO6 (CODEC_PWR_DIS#, active LOW).
+            Set to -1 if no power-enable GPIO is needed.
+
+    config MOS_AUDIO_I2S_NUM
+        int "I2S port number"
+        default 0
+        range 0 1
+        help
+            I2S port number. Olimex ESP32-P4-PC: I2S0 (port 0).
+
+    config MOS_AUDIO_I2S_DOUT_GPIO
+        int "I2S DOUT (ESP→codec DAC) GPIO"
+        default 9
+        help
+            I2S data output GPIO (ESP32 → ES8311 DAC input).
+            Olimex ESP32-P4-PC: GPIO9 (I2S_DSDIN).
+
+    config MOS_AUDIO_I2S_WS_GPIO
+        int "I2S WS (LRCK) GPIO"
+        default 10
+        help
+            I2S word-select (left-right clock) GPIO.
+            Olimex ESP32-P4-PC: GPIO10 (I2S_LRCK).
+
+    config MOS_AUDIO_I2S_DIN_GPIO
+        int "I2S DIN (codec ADC→ESP) GPIO"
+        default 11
+        help
+            I2S data input GPIO (ES8311 ADC output → ESP32).
+            Olimex ESP32-P4-PC: GPIO11 (I2S_ASDOUT).
+
+    config MOS_AUDIO_I2S_BCLK_GPIO
+        int "I2S BCLK GPIO"
+        default 12
+        help
+            I2S bit-clock GPIO.
+            Olimex ESP32-P4-PC: GPIO12 (I2S_SCLK).
+
+    config MOS_AUDIO_I2S_MCLK_GPIO
+        int "I2S MCLK GPIO"
+        default 13
+        help
+            I2S master-clock GPIO (256×fs = 4.194304 MHz for 16384 Hz).
+            Olimex ESP32-P4-PC: GPIO13 (I2S_MCLK).
+
+    config MOS_AUDIO_SAMPLE_RATE
+        int "Audio sample rate (Hz)"
+        default 16384
+        help
+            Sample rate in Hz. BBC Micro / Agon audio uses 16384 Hz mono.
+            The ES8311 and I2S APLL are configured for this exact rate.
+            MCLK = 256 * sample_rate = 4,194,304 Hz.
+
+    endif # MOS_AUDIO_ENABLED
+
+endmenu

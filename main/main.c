@@ -35,6 +35,10 @@
 #include "esp_lcd_lt8912b.h"
 #endif
 
+#ifdef CONFIG_MOS_AUDIO_ENABLED
+#include "mos_audio.h"
+#endif
+
 static const char *TAG = "esp32-mos";
 
 /* ------------------------------------------------------------------ */
@@ -219,6 +223,15 @@ static void mos_main_task(void *arg)
      *     Non-fatal: if HDMI init fails, rest of the system continues normally. */
 #ifdef CONFIG_LT8912B_ENABLED
     hdmi_init();
+#endif
+
+    /* 1c. Audio codec (Olimex ESP32-P4-PC only) — ES8311 I2S+I2C, 16384 Hz mono.
+     *     Powers on codec (GPIO6 active LOW), starts I2S0 APLL, configures ES8311.
+     *     Non-fatal: if audio init fails, rest of the system continues normally. */
+#ifdef CONFIG_MOS_AUDIO_ENABLED
+    if (mos_audio_init() != ESP_OK) {
+        ESP_LOGW(TAG, "Audio init failed — continuing without audio");
+    }
 #endif
 
     /* 2. (Done in app_main) — report flash result */
