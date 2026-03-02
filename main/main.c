@@ -29,7 +29,90 @@
 #include "mos_sntp.h"
 #include "mos_vdp.h"
 
+#ifdef CONFIG_LT8912B_ENABLED
+#include "esp_lcd_panel_ops.h"
+#include "esp_lcd_mipi_dsi.h"
+#include "esp_lcd_lt8912b.h"
+#endif
+
 static const char *TAG = "esp32-mos";
+
+/* ------------------------------------------------------------------ */
+/* HDMI output via LT8912B (Olimex ESP32-P4-PC only)                   */
+/* ------------------------------------------------------------------ */
+#ifdef CONFIG_LT8912B_ENABLED
+static void hdmi_init(void)
+{
+    /* 1. Create MIPI DSI bus (2-lane, 350 Mbps, XTAL PLL source) */
+    esp_lcd_dsi_bus_handle_t dsi_bus = NULL;
+    esp_lcd_dsi_bus_config_t bus_cfg = {
+        .bus_id             = 0,
+        .num_data_lanes     = CONFIG_LT8912B_DSI_LANES,
+        .phy_clk_src        = MIPI_DSI_PHY_CLK_SRC_DEFAULT,
+        .lane_bit_rate_mbps = CONFIG_LT8912B_DSI_LANE_MBPS,
+    };
+    if (esp_lcd_new_dsi_bus(&bus_cfg, &dsi_bus) != ESP_OK) {
+        ESP_LOGE(TAG, "HDMI: DSI bus init failed");
+        return;
+    }
+
+    /* 2. Patch: disable EoTP — LT8912B cannot handle it */
+    if (esp_lcd_lt8912b_patch_dsi_eotp(dsi_bus) != ESP_OK) {
+        ESP_LOGE(TAG, "HDMI: EoTP patch failed");
+        esp_lcd_del_dsi_bus(dsi_bus);
+        return;
+    }
+
+    /* 3. Initialize LT8912B via I2C (programs all registers for 640x480@60Hz) */
+    esp_lcd_lt8912b_config_t lt_cfg = {
+        .i2c_port  = CONFIG_LT8912B_I2C_PORT,
+        .sda_gpio  = CONFIG_LT8912B_SDA_GPIO,
+        .scl_gpio  = CONFIG_LT8912B_SCL_GPIO,
+        .hpd_gpio  = CONFIG_LT8912B_HPD_GPIO,
+        .hdmi_mode = CONFIG_LT8912B_HDMI_MODE,
+    };
+    if (esp_lcd_lt8912b_init(&lt_cfg) != ESP_OK) {
+        ESP_LOGE(TAG, "HDMI: LT8912B I2C init failed");
+        esp_lcd_del_dsi_bus(dsi_bus);
+        return;
+    }
+
+    /* 4. Create DPI panel — feeds pixel data from ESP32-P4 to LT8912B DSI input.
+     *    640x480 @ 25.175 MHz pixel clock, RGB888 (24-bit).
+     *    disable_lp=1: stay in HS mode during blanking (required for video mode). */
+    esp_lcd_panel_handle_t panel = NULL;
+    esp_lcd_dpi_panel_config_t dpi_cfg = {
+        .dpi_clk_src         = MIPI_DSI_DPI_CLK_SRC_DEFAULT,
+        .dpi_clock_freq_mhz  = 25,          /* 25 MHz ≈ 25.175; close enough for PLL */
+        .pixel_format        = LCD_COLOR_PIXEL_FORMAT_RGB888,
+        .num_fbs             = 1,
+        .video_timing = {
+            .h_size          = 640,
+            .v_size          = 480,
+            .hsync_pulse_width = 96,
+            .hsync_back_porch  = 40,
+            .hsync_front_porch = 8,
+            .vsync_pulse_width = 2,
+            .vsync_back_porch  = 10,
+            .vsync_front_porch = 33,
+        },
+        .flags.disable_lp    = 1,
+    };
+    if (esp_lcd_new_panel_dpi(dsi_bus, &dpi_cfg, &panel) != ESP_OK) {
+        ESP_LOGE(TAG, "HDMI: DPI panel init failed");
+        esp_lcd_lt8912b_deinit();
+        esp_lcd_del_dsi_bus(dsi_bus);
+        return;
+    }
+
+    /* 5. Enable the panel */
+    esp_lcd_panel_init(panel);
+    esp_lcd_panel_disp_on_off(panel, true);
+
+    ESP_LOGI(TAG, "HDMI: 640x480@60Hz ready%s",
+             esp_lcd_lt8912b_is_connected() ? " (cable connected)" : " (no cable)");
+}
+#endif /* CONFIG_LT8912B_ENABLED */
 
 /*
  * VDU colour helpers — verified against agon-vdp/video/vdu.h
@@ -130,6 +213,13 @@ static void mos_main_task(void *arg)
 
     /* 1. Console */
     mos_hal_console_init();
+
+    /* 1b. HDMI output (Olimex ESP32-P4-PC only) — independent of VDP/network.
+     *     Initializes DSI bus + LT8912B registers for 640x480@60Hz output.
+     *     Non-fatal: if HDMI init fails, rest of the system continues normally. */
+#ifdef CONFIG_LT8912B_ENABLED
+    hdmi_init();
+#endif
 
     /* 2. (Done in app_main) — report flash result */
     if ((intptr_t)arg != 0) {

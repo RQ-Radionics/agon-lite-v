@@ -1,0 +1,69 @@
+menu "LT8912B HDMI Bridge"
+    depends on IDF_TARGET_ESP32P4
+
+    config LT8912B_ENABLED
+        bool "Enable LT8912B HDMI bridge driver"
+        default n
+        help
+            Enable the LT8912B MIPI DSI to HDMI bridge driver.
+            Required for HDMI output on boards with an LT8912B chip
+            (e.g. Olimex ESP32-P4-PC).
+
+    if LT8912B_ENABLED
+
+    config LT8912B_I2C_PORT
+        int "I2C port number"
+        default 1
+        range 0 1
+        help
+            I2C port used to configure the LT8912B (sub-addresses 0x48/0x49/0x4A).
+            Typically I2C_NUM_1 (port 1) to avoid conflict with the agon-mos
+            user I2C API which uses port 0.
+
+    config LT8912B_SDA_GPIO
+        int "I2C SDA GPIO"
+        default 23
+        help
+            GPIO for I2C SDA to the LT8912B. Olimex ESP32-P4-PC: GPIO23.
+
+    config LT8912B_SCL_GPIO
+        int "I2C SCL GPIO"
+        default 22
+        help
+            GPIO for I2C SCL to the LT8912B. Olimex ESP32-P4-PC: GPIO22.
+
+    config LT8912B_HPD_GPIO
+        int "HDMI Hot-Plug Detect GPIO (-1 = disabled)"
+        default 15
+        range -1 56
+        help
+            GPIO connected to HDMI HPD signal. Set to -1 to disable HPD
+            monitoring. Olimex ESP32-P4-PC: GPIO15.
+
+    config LT8912B_HDMI_MODE
+        bool "HDMI mode (vs DVI)"
+        default y
+        help
+            When enabled, the LT8912B outputs HDMI protocol (with audio
+            InfoFrame support). When disabled, outputs DVI-compatible signal.
+            Most modern monitors require HDMI mode.
+
+    config LT8912B_DSI_LANES
+        int "DSI lane count"
+        default 2
+        range 1 2
+        help
+            Number of MIPI DSI data lanes connected to the LT8912B.
+            Olimex ESP32-P4-PC uses 2 lanes.
+
+    config LT8912B_DSI_LANE_MBPS
+        int "DSI lane bit rate (Mbps)"
+        default 350
+        help
+            MIPI DSI bit rate per lane in Mbps. For 640x480@60Hz with 2 lanes
+            and RGB888: minimum is ceil(25.175 * 24 / 2 / 2) = 151 Mbps.
+            350 Mbps gives comfortable margin for the PHY.
+
+    endif # LT8912B_ENABLED
+
+endmenu

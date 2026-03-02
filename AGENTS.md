@@ -133,7 +133,7 @@ pin = -1 → no SDIO probing at boot on the Olimex. Functionally safe.
 
 Both P4 scripts wipe `sdkconfig` and `build/` before running `idf.py set-target`.
 
-## Current State (session end 2026-03-02)
+## Current State (session end 2026-03-02, session 2)
 
 ### Fully working ✅ (Waveshare ESP32-P4-WIFI6)
 - VDP handshake, color banner, mode 16
@@ -151,14 +151,30 @@ Both P4 scripts wipe `sdkconfig` and `build/` before running `idf.py set-target`
 - `mos_net` abstraction: Ethernet backend with IP101GRR PHY via RMII
 - `mos_hal` console: USB-JTAG/CDC (USB-C on the Olimex board)
 - Correct GPIO pins from schematic Rev B
+- **`esp_lcd_lt8912b` driver**: MIPI DSI → HDMI bridge (esp32-mos-4p4)
+  - `components/esp_lcd_lt8912b/` — full register init sequence (upstream Linux kernel)
+  - Fixed 640×480@60Hz HDMI output (all 18 Agon video modes scaled to this)
+  - EoTP patch in separate compilation unit (avoids TAG macro conflict with IDF)
+  - HPD detect via GPIO15 + I2C register 0x48:0xC1 bit7
+  - Integrated into `main.c` `hdmi_init()`, called before network/shell
+  - `sdkconfig.defaults.olimex-p4pc`: `CONFIG_LT8912B_ENABLED=y` + GPIO config
+
+### Design decision recorded: Agon video modes and HDMI output
+- Agon has 18 standard modes (plus extended/double-buffered variants)
+- Pixel clocks range from 12.5 MHz (320×200) to 65 MHz (1024×768)
+- **HDMI output is FIXED at 640×480@60Hz** for all Agon modes
+- Modes with lower resolution (320×240, 512×384, etc.) are rendered at native
+  resolution in PSRAM framebuffer and the MIPI DSI stream always outputs 640×480
+- High-res modes (800×600, 1024×768) are deferred — issue esp32-mos-agw
 
 ### Next areas to work on
-- **Hardware test the Olimex build** — flash and confirm boot, Ethernet DHCP,
-  USB-JTAG console, shell prompt
-- Confirm BBC BASIC works interactively on VDP (type PRINT PI, A=1, etc.)
-- More shell commands (TYPE, DEL, RENAME, COPY, CD, MKDIR)
-- XMODEM receive for uploading binaries over serial
-- More user SDK examples
+- **Hardware test LT8912B**: flash Olimex build, connect HDMI monitor, verify signal
+  (look for: chip ID 0x12B2 in log, HPD detect, 640×480 sync on monitor)
+- **Driver 2: `mos_audio`** — ES8311 codec I2S+I2C (esp32-mos-sj7)
+  - I2C_NUM_0 GPIO7/8, I2S0 GPIO9-13, MCLK 4.194 MHz, 16384 Hz mono
+  - Fork `esp_codec_dev` to add 16384 Hz entry to coeff_div[]
+- **Driver 3: `mos_kbd`** — USB HID keyboard via FE1.1s hub (esp32-mos-7x7)
+  - USB PHY 1 OTG11, GPIO26/27, GPIO21=HUB_RST#
 - I2C driver (issue esp32-mos-h4x)
-- Sprites: investigate why sprites don't appear despite correct VDP sequence
+- More shell commands (TYPE, DEL, RENAME, COPY, CD, MKDIR)
 

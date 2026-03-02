@@ -49,6 +49,17 @@ CONFIG_MOS_ETH_PHY_RST_GPIO=51
 # Wait up to 5 s for link + DHCP; continue without network if cable is unplugged
 CONFIG_MOS_ETH_LINK_TIMEOUT_MS=5000
 
+# LT8912B HDMI bridge (MIPI DSI → HDMI via I2C configuration)
+# Olimex ESP32-P4-PC: I2C1 SDA=GPIO23 SCL=GPIO22, HPD=GPIO15
+CONFIG_LT8912B_ENABLED=y
+CONFIG_LT8912B_I2C_PORT=1
+CONFIG_LT8912B_SDA_GPIO=23
+CONFIG_LT8912B_SCL_GPIO=22
+CONFIG_LT8912B_HPD_GPIO=15
+CONFIG_LT8912B_HDMI_MODE=y
+CONFIG_LT8912B_DSI_LANES=2
+CONFIG_LT8912B_DSI_LANE_MBPS=350
+
 # esp-hosted / WiFi coprocessor — this board has no C6 coprocessor.
 # The managed component enables itself by default; override to disable.
 # Kconfig uses "# CONFIG_x is not set" to reliably disable a boolean.
