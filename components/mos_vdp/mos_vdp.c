@@ -43,6 +43,7 @@
 #include "lwip/netdb.h"
 #include "esp_log.h"
 
+#include "mos_sysvars_block.h"   /* t_mos_sysvars */
 #include "mos_vdp.h"
 
 static const char *TAG = "mos_vdp";

@@ -22,7 +22,8 @@
 
 #include <stdint.h>
 #include <stddef.h>
-#include "mos_vdp.h"   /* t_mos_sysvars */
+#include <stdbool.h>
+#include "mos_sysvars_block.h"   /* t_mos_sysvars */
 
 /* Magic value at offset 0 — lets user code verify the table is present */
 #define MOS_API_MAGIC   0x4D4F5301UL   /* 'MOS\x01' */
