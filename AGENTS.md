@@ -107,9 +107,35 @@ memset(userRAM, 0, (size_t) ram_size);
 ```
 Must be done right after `malloc()`, before setting up workspace pointers.
 
-## Current State (session end 2026-02-26)
+## sdkconfig Isolation — CRITICAL (commit 9ef186b)
 
-### Fully working ✅
+**Problem**: IDF auto-loads `sdkconfig.defaults.<target>` by name convention.
+Naming the Waveshare config `sdkconfig.defaults.esp32p4` caused IDF to pull it
+in for ALL esp32p4 builds (including Olimex), enabling the C6 WiFi coprocessor
+(esp_hosted over SDIO slot 1) even though Olimex has no C6.
+
+**Fix**: Rename to `sdkconfig.defaults.waveshare-p4wifi` (no longer matches
+the auto-load convention). Both build scripts explicitly set `SDKCONFIG_DEFAULTS`
+and wipe `sdkconfig` + `build/` before each build.
+
+**Residual**: The `espressif__esp_hosted` managed component still compiles for
+both boards (it's in `idf_component.yml` with `if: "target in [esp32p4]"`).
+It defaults to enabled but selects `ESP_HOSTED_P4_DEV_BOARD_NONE` → GPIO reset
+pin = -1 → no SDIO probing at boot on the Olimex. Functionally safe.
+
+## Build Scripts
+
+| Script | Board | Config files loaded |
+|---|---|---|
+| `build_p4.sh` | Waveshare ESP32-P4-WIFI6 | `sdkconfig.defaults` + `sdkconfig.defaults.waveshare-p4wifi` |
+| `build_olimex_p4pc.sh` | Olimex ESP32-P4-PC | `sdkconfig.defaults` + `sdkconfig.defaults.olimex-p4pc` |
+| `build_s3.sh` | Waveshare ESP32-S3 | `sdkconfig.defaults` |
+
+Both P4 scripts wipe `sdkconfig` and `build/` before running `idf.py set-target`.
+
+## Current State (session end 2026-03-02)
+
+### Fully working ✅ (Waveshare ESP32-P4-WIFI6)
 - VDP handshake, color banner, mode 16
 - FAT mount with write (`wl_wrap.py`)
 - PSRAM enabled
@@ -117,9 +143,18 @@ Must be done right after `malloc()`, before setting up workspace pointers.
 - Loader: fixed arena, two-step cache sync, IBUS jump, Xtensa magic byte check
 - SDK: `mos_vector.S` trampoline, correct IBUS/DBUS split linker script, little-endian
 - **`helloworld` executes, prints to VDP, writes file — full API chain confirmed**
-- **`bbcbasic` heap zero fix applied** — no more StoreProhibited crash; launches without serial crash output (VDP output not yet confirmed visually)
+- **`bbcbasic` heap zero fix applied** — no more StoreProhibited crash
+
+### Fully working ✅ (Olimex ESP32-P4-PC — compile-verified, not yet hardware-tested)
+- `build_olimex_p4pc.sh` builds cleanly (0 errors)
+- `app_main` launches `mos_main_task` with 96KB PSRAM stack (stack overflow fix)
+- `mos_net` abstraction: Ethernet backend with IP101GRR PHY via RMII
+- `mos_hal` console: USB-JTAG/CDC (USB-C on the Olimex board)
+- Correct GPIO pins from schematic Rev B
 
 ### Next areas to work on
+- **Hardware test the Olimex build** — flash and confirm boot, Ethernet DHCP,
+  USB-JTAG console, shell prompt
 - Confirm BBC BASIC works interactively on VDP (type PRINT PI, A=1, etc.)
 - More shell commands (TYPE, DEL, RENAME, COPY, CD, MKDIR)
 - XMODEM receive for uploading binaries over serial
