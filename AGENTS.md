@@ -133,7 +133,7 @@ pin = -1 → no SDIO probing at boot on the Olimex. Functionally safe.
 
 Both P4 scripts wipe `sdkconfig` and `build/` before running `idf.py set-target`.
 
-## Current State (session end 2026-03-02, session 2)
+## Current State (session end 2026-03-02, session 3)
 
 ### Fully working ✅ (Waveshare ESP32-P4-WIFI6)
 - VDP handshake, color banner, mode 16
@@ -151,13 +151,25 @@ Both P4 scripts wipe `sdkconfig` and `build/` before running `idf.py set-target`
 - `mos_net` abstraction: Ethernet backend with IP101GRR PHY via RMII
 - `mos_hal` console: USB-JTAG/CDC (USB-C on the Olimex board)
 - Correct GPIO pins from schematic Rev B
-- **`esp_lcd_lt8912b` driver**: MIPI DSI → HDMI bridge (esp32-mos-4p4)
+- **`esp_lcd_lt8912b` driver**: MIPI DSI → HDMI bridge (esp32-mos-4p4, closed)
   - `components/esp_lcd_lt8912b/` — full register init sequence (upstream Linux kernel)
   - Fixed 640×480@60Hz HDMI output (all 18 Agon video modes scaled to this)
   - EoTP patch in separate compilation unit (avoids TAG macro conflict with IDF)
   - HPD detect via GPIO15 + I2C register 0x48:0xC1 bit7
-  - Integrated into `main.c` `hdmi_init()`, called before network/shell
-  - `sdkconfig.defaults.olimex-p4pc`: `CONFIG_LT8912B_ENABLED=y` + GPIO config
+- **`mos_audio` driver**: ES8311 codec I2S+I2C 16384 Hz mono (esp32-mos-sj7, closed)
+  - `components/mos_audio/` — direct ES8311 register init, I2S0 APLL
+  - GPIO6 = CODEC_PWR_DIS# (drive LOW to enable)
+- **`mos_kbd` driver**: USB HID keyboard via FE1.1s hub (esp32-mos-7x7, closed)
+  - `components/mos_kbd/` — full HID boot-protocol keyboard, PS/2 Set 2 scancodes
+  - `espressif/usb_host_hid ^1.1.0` managed component (auto-downloaded)
+  - USB PHY1 (OTG11 FS) `peripheral_map=BIT1`, GPIO26/27, HUB_RST# GPIO21
+  - HID device callback runs inline in HID background task (core 0) — no queue
+  - Scancode stub in `main.c` (logs at DEBUG); will be replaced by internal VDP
+  - `CONFIG_USB_HOST_HUBS_SUPPORTED=y`, `CONFIG_USB_HOST_HUB_MULTI_LEVEL=y`
+
+### mos_kbd CMakeLists.txt note (learned this session)
+- `espressif__usb_host_hid` must be in `PRIV_REQUIRES` (not `REQUIRES`) because the
+  headers are only needed internally. IDF 5.x enforces this at configure time.
 
 ### Design decision recorded: Agon video modes and HDMI output
 - Agon has 18 standard modes (plus extended/double-buffered variants)
@@ -168,13 +180,11 @@ Both P4 scripts wipe `sdkconfig` and `build/` before running `idf.py set-target`
 - High-res modes (800×600, 1024×768) are deferred — issue esp32-mos-agw
 
 ### Next areas to work on
-- **Hardware test LT8912B**: flash Olimex build, connect HDMI monitor, verify signal
-  (look for: chip ID 0x12B2 in log, HPD detect, 640×480 sync on monitor)
-- **Driver 2: `mos_audio`** — ES8311 codec I2S+I2C (esp32-mos-sj7)
-  - I2C_NUM_0 GPIO7/8, I2S0 GPIO9-13, MCLK 4.194 MHz, 16384 Hz mono
-  - Fork `esp_codec_dev` to add 16384 Hz entry to coeff_div[]
-- **Driver 3: `mos_kbd`** — USB HID keyboard via FE1.1s hub (esp32-mos-7x7)
-  - USB PHY 1 OTG11, GPIO26/27, GPIO21=HUB_RST#
+- **Hardware test**: flash Olimex build, verify HDMI, audio, keyboard on real hardware
+- **`mos_vdp_internal`** — port console8 C++ VDP core as IDF component (esp32-mos-hfq)
+  - Once done, replace `mos_kbd_scancode_stub` in `main.c` with
+    `mos_vdp_internal_send_scancode()` — the stub is clearly marked with TODO comment
+- **`mos_vdp` dual router** — TCP external / internal VDP (esp32-mos-edq)
 - I2C driver (issue esp32-mos-h4x)
 - More shell commands (TYPE, DEL, RENAME, COPY, CD, MKDIR)
 
