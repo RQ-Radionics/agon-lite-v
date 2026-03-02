@@ -111,6 +111,16 @@ typedef struct {
     uint8_t  (*i2c_write)(uint8_t addr, uint8_t size, const char *buf);
     uint8_t  (*i2c_read)(uint8_t addr, uint8_t size, char *buf);
 
+    /* --- secondary UART (agon-mos 15h-18h) --- */
+    /* uopen: open UART1 at given baud rate. Returns 0 on success, -1 on error. */
+    int      (*uopen)(uint32_t baud);
+    /* uclose: close UART1 and free its resources. */
+    void     (*uclose)(void);
+    /* ugetc: read one byte (blocking). Returns 0-255 or -1 if not open. */
+    int      (*ugetc)(void);
+    /* uputc: write one byte. Returns 0 on success, -1 if not open. */
+    int      (*uputc)(uint8_t c);
+
     /* --- VDP synchronisation --- */
     /* Send a General Poll to the VDP and block until the response arrives.
      * This ensures all previously queued VDU bytes have been processed by

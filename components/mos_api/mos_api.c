@@ -30,6 +30,7 @@
 #include "freertos/task.h"
 #include "esp_timer.h"
 #include "mos_i2c.h"
+#include "mos_uart.h"
 
 /* Allocate from PSRAM for user programs (BBC BASIC needs large heaps) */
 static void *mos_malloc_spiram(size_t size)
@@ -543,6 +544,11 @@ void mos_api_table_init(void)
     t->i2c_close    = mos_api_i2c_close;
     t->i2c_write    = mos_api_i2c_write;
     t->i2c_read     = mos_api_i2c_read;
+
+    t->uopen    = mos_uopen;
+    t->uclose   = mos_uclose;
+    t->ugetc    = mos_ugetc;
+    t->uputc    = mos_uputc;
 
     t->vdp_sync         = mos_vdp_sync;
     t->vdp_request_mode = mos_vdp_request_mode;
