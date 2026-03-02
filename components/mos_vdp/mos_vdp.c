@@ -535,10 +535,10 @@ int mos_vdp_getch(void)
 {
     uint8_t byte;
     while (!s_connected) {
-        if (s_abort) return -1;
+        if (s_abort || s_disconnecting) return -1;
         vTaskDelay(pdMS_TO_TICKS(50));
     }
-    if (s_abort) return -1;
+    if (s_abort || s_disconnecting) return -1;
     /* Flush any pending TX bytes before blocking on input */
     mos_vdp_flush();
     /* Poll queue in short intervals so we can detect abort mid-wait */

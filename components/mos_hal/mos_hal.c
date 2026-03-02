@@ -74,10 +74,10 @@ void mos_putch(char c)
 
 int mos_getch(void)
 {
-    if (mos_vdp_connected()) {
-        /* -1 means VDP disconnected — propagate it, do NOT fall back to console.
-         * The shell / editor will see -1 and return, allowing the session loop
-         * in main.c to wait for the next VDP connection. */
+    if (mos_vdp_connected() || mos_vdp_disconnecting()) {
+        /* Route through VDP even while disconnecting so the shell gets -1
+         * promptly rather than falling through to the local console.
+         * mos_vdp_getch() returns -1 immediately when s_disconnecting=true. */
         return mos_vdp_getch();
     }
     /* Both USB-JTAG and UART go through the IDF VFS — getchar() works for both. */
