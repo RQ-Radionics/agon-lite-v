@@ -113,7 +113,12 @@ static void print_banner(void)
 /* esp_netif / Ethernet init / vfprintf don't overflow the tiny        */
 /* app_main stack on RISC-V (each frame is much larger than Xtensa).  */
 /* ------------------------------------------------------------------ */
-#define MOS_MAIN_STACK_KB   96
+/* 192 KB: mos_main_task runs esp_vfs_usb_serial_jtag_use_driver() +
+ * Ethernet init (esp_netif_init, esp_eth_driver_install) which together
+ * consume ~80-100 KB on RISC-V due to large ABI call frames and deep
+ * newlib/lwIP stacks.  96 KB was confirmed insufficient (SP underflowed
+ * by 36 bytes at mos_hal_console_init() entry).                         */
+#define MOS_MAIN_STACK_KB   192
 
 static void mos_main_task(void *arg)
 {
