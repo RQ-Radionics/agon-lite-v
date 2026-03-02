@@ -57,9 +57,9 @@ Extraído del esquemático **ESP32-P4-PC_Rev_B** (KiCad, 2026-01-29).
 | RMII_RXD0      | GPIO29 |
 | RMII_RXD1      | GPIO30 |
 | RMII_RXDV      | GPIO28 |
-| MDC            | GPIO36 (net `MDC`) |
-| MDIO           | GPIO (net `MDIO`, ver esquemático) |
-| PHY_RESET_N    | GPIO (net `PHY_RSTN`) |
+| MDC            | GPIO31 |
+| MDIO           | GPIO52 |
+| PHY_RESET_N    | GPIO51 |
 
 > **Nota**: El PHY provee el reloj de 50 MHz en `RXCLK/50M_CLKO`. El ESP32-P4 debe configurarse en modo RMII con CLK externo del PHY.
 
