@@ -201,6 +201,44 @@ long mos_api_ftell(uint8_t fh)
 }
 
 /* =========================================================================
+ * Bulk load / save
+ * ========================================================================= */
+
+int mos_api_load(const char *path, void *addr, size_t *bytes_read)
+{
+    if (!path || !addr || !bytes_read) return -1;
+    char resolved[MOS_PATH_MAX];
+    mos_fs_resolve(path, resolved, sizeof(resolved));
+    FILE *f = fopen(resolved, "rb");
+    if (!f) return -1;
+    /* Read in chunks so we don't need a size query first */
+    size_t total = 0;
+    uint8_t *dst = (uint8_t *)addr;
+    size_t n;
+    while ((n = fread(dst + total, 1, 4096, f)) > 0)
+        total += n;
+    int err = ferror(f);
+    fclose(f);
+    if (err) return -1;
+    *bytes_read = total;
+    return 0;
+}
+
+int mos_api_save(const char *path, const void *addr, size_t len)
+{
+    if (!path || !addr) return -1;
+    char resolved[MOS_PATH_MAX];
+    mos_fs_resolve(path, resolved, sizeof(resolved));
+    FILE *f = fopen(resolved, "wb");
+    if (!f) return -1;
+    size_t written = fwrite(addr, 1, len, f);
+    int err = ferror(f);
+    fclose(f);
+    if (err || written != len) return -1;
+    return 0;
+}
+
+/* =========================================================================
  * Directory / path operations
  * ========================================================================= */
 
@@ -459,6 +497,9 @@ void mos_api_table_init(void)
     t->putch      = mos_api_putch;
     t->puts       = mos_api_puts;
     t->editline   = mos_api_editline;
+
+    t->load       = mos_api_load;
+    t->save       = mos_api_save;
 
     t->fopen      = mos_api_fopen;
     t->fclose     = mos_api_fclose;

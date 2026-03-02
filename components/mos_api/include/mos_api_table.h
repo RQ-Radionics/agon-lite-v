@@ -47,6 +47,14 @@ typedef struct {
     void     (*puts)(const char *s);
     int      (*editline)(char *buf, int len);
 
+    /* --- bulk file load/save --- */
+    /* mos_load: open file, read entire contents into *addr, set *bytes_read.
+     * Returns 0 on success, -1 on error. */
+    int      (*load)(const char *path, void *addr, size_t *bytes_read);
+    /* mos_save: write len bytes from addr to file (created/truncated).
+     * Returns 0 on success, -1 on error. */
+    int      (*save)(const char *path, const void *addr, size_t len);
+
     /* --- file I/O --- */
     uint8_t  (*fopen)(const char *path, const char *mode);
     int      (*fclose)(uint8_t fh);
