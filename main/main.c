@@ -273,21 +273,32 @@ void app_main(void)
         ESP_LOGE(TAG, "Flash FAT mount failed");
     }
 
-    /* 2. Spawn mos_main_task with a large PSRAM stack.
-     *    TCB must be in internal RAM (LP DRAM); stack can be PSRAM since
-     *    no further SPI flash cache ops occur from that task context.    */
+     /* 2. Spawn mos_main_task with a large PSRAM stack.
+     *    TCB must be in internal RAM (LP DRAM); stack in PSRAM is fine since
+     *    no SPI flash cache-stop ops occur from that task context.
+     *
+     *    xTaskCreateStatic ulStackDepth is in WORDS (StackType_t units), even
+     *    though IDF docs say "bytes" — the kernel does:
+     *      memset(stack, FILL, ulStackDepth * sizeof(StackType_t))
+     *      pxTop = &stack[ulStackDepth - 1]
+     *    So the buffer must be ulStackDepth * sizeof(StackType_t) bytes large.
+     *    We define depth in words and allocate depth * sizeof(StackType_t) bytes.
+     */
+#define MOS_MAIN_STACK_WORDS  (MOS_MAIN_STACK_KB * 1024 / sizeof(StackType_t))
+
     StaticTask_t *tcb   = heap_caps_malloc(sizeof(StaticTask_t),
                                            MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    StackType_t  *stack = heap_caps_malloc(MOS_MAIN_STACK_KB * 1024,
+    StackType_t  *stack = heap_caps_malloc(MOS_MAIN_STACK_WORDS * sizeof(StackType_t),
                                            MALLOC_CAP_SPIRAM);
 
     if (!tcb || !stack) {
         ESP_LOGE(TAG, "PSRAM stack alloc failed — falling back to xTaskCreate");
+        /* xTaskCreate with IDF truly does use bytes internally */
         xTaskCreate(mos_main_task, "mos_main", MOS_MAIN_STACK_KB * 1024,
                     (void *)(intptr_t)flash_ok, 5, NULL);
     } else {
         xTaskCreateStatic(mos_main_task, "mos_main",
-                          MOS_MAIN_STACK_KB * 1024,
+                          MOS_MAIN_STACK_WORDS,       /* words, not bytes */
                           (void *)(intptr_t)flash_ok,
                           5, stack, tcb);
     }
