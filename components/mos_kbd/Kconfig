@@ -1,0 +1,37 @@
+menu "MOS Keyboard (USB HID)"
+
+config MOS_KBD_ENABLED
+    bool "Enable USB HID keyboard driver"
+    default n
+    help
+        Enable the mos_kbd driver which uses the USB host stack to receive
+        HID keyboard events from a USB keyboard connected via a FE1.1s hub.
+        Produces PS/2 Set 2 scancodes for the VDP internal layer.
+
+if MOS_KBD_ENABLED
+
+config MOS_KBD_HUB_RST_GPIO
+    int "GPIO for hub reset (HUB_RST#, active LOW)"
+    default 21
+    help
+        GPIO connected to the active-LOW reset pin of the FE1.1s USB hub.
+        The driver drives this HIGH (deassert reset) before starting the
+        USB host stack, and LOW briefly on shutdown.
+
+config MOS_KBD_USB_DP_GPIO
+    int "GPIO for USB D+ (OTG11 FS)"
+    default 27
+    help
+        GPIO used for D+ of the USB Full-Speed PHY1 (OTG11).
+        On Olimex ESP32-P4-PC: GPIO27.
+
+config MOS_KBD_USB_DM_GPIO
+    int "GPIO for USB D- (OTG11 FS)"
+    default 26
+    help
+        GPIO used for D- of the USB Full-Speed PHY1 (OTG11).
+        On Olimex ESP32-P4-PC: GPIO26.
+
+endif # MOS_KBD_ENABLED
+
+endmenu

@@ -75,6 +75,17 @@ CONFIG_LT8912B_HDMI_MODE=y
 CONFIG_LT8912B_DSI_LANES=2
 CONFIG_LT8912B_DSI_LANE_MBPS=350
 
+# USB HID host — keyboard via FE1.1s hub on PHY1 (GPIO26/27, OTG11 Full-Speed)
+# Hub support is required for the FE1.1s USB hub connected to the keyboard port.
+CONFIG_USB_HOST_HUBS_SUPPORTED=y
+CONFIG_USB_HOST_HUB_MULTI_LEVEL=y
+
+# mos_kbd component
+CONFIG_MOS_KBD_ENABLED=y
+CONFIG_MOS_KBD_HUB_RST_GPIO=21
+CONFIG_MOS_KBD_USB_DP_GPIO=27
+CONFIG_MOS_KBD_USB_DM_GPIO=26
+
 # esp-hosted / WiFi coprocessor — this board has no C6 coprocessor.
 # The managed component enables itself by default; override to disable.
 # Kconfig uses "# CONFIG_x is not set" to reliably disable a boolean.

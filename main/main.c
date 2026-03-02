@@ -39,7 +39,25 @@
 #include "mos_audio.h"
 #endif
 
+#ifdef CONFIG_MOS_KBD_ENABLED
+#include "mos_kbd.h"
+#endif
+
 static const char *TAG = "esp32-mos";
+
+/* ------------------------------------------------------------------ */
+/* Keyboard scancode stub (Olimex ESP32-P4-PC)                         */
+/*                                                                      */
+/* Receives PS/2 Set 2 scancode bytes from mos_kbd and logs them at    */
+/* DEBUG level.  Will be replaced by mos_vdp_internal_send_scancode()  */
+/* when the internal VDP component (esp32-mos-hfq) is implemented.    */
+/* ------------------------------------------------------------------ */
+#ifdef CONFIG_MOS_KBD_ENABLED
+static void mos_kbd_scancode_stub(uint8_t byte)
+{
+    ESP_LOGD(TAG, "KBD scancode: 0x%02X", byte);
+}
+#endif
 
 /* ------------------------------------------------------------------ */
 /* HDMI output via LT8912B (Olimex ESP32-P4-PC only)                   */
@@ -231,6 +249,18 @@ static void mos_main_task(void *arg)
 #ifdef CONFIG_MOS_AUDIO_ENABLED
     if (mos_audio_init() != ESP_OK) {
         ESP_LOGW(TAG, "Audio init failed — continuing without audio");
+    }
+#endif
+
+    /* 1d. USB HID keyboard (Olimex ESP32-P4-PC only) — PHY1 GPIO26/27, hub GPIO21.
+     *     Produces PS/2 Set 2 scancodes delivered via callback.
+     *     Non-fatal: if keyboard init fails, rest of system continues normally.
+     *
+     *     TODO (esp32-mos-hfq): replace stub with mos_vdp_internal_send_scancode()
+     *     once the internal VDP component is implemented. */
+#ifdef CONFIG_MOS_KBD_ENABLED
+    if (mos_kbd_init(mos_kbd_scancode_stub) != ESP_OK) {
+        ESP_LOGW(TAG, "Keyboard init failed — continuing without keyboard");
     }
 #endif
 
