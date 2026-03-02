@@ -25,7 +25,9 @@
  *   sysvar_scrCols      0x13  sysvar_scrRows     0x14  sysvar_scrColours  0x15
  *   sysvar_scrpixelIndex 0x16 sysvar_vkeycode    0x17  sysvar_vkeydown    0x18
  *   sysvar_vkeycount    0x19  sysvar_rtc         0x1A  sysvar_keydelay    0x20
- *   sysvar_keyrate      0x22  sysvar_keyled      0x24
+ *   sysvar_keyrate      0x22  sysvar_keyled      0x24  sysvar_scrMode     0x27
+ *   sysvar_mouseX       0x29  sysvar_mouseY      0x2B  sysvar_mouseButtons 0x2D
+ *   sysvar_mouseWheel   0x2E  sysvar_mouseXDelta 0x2F  sysvar_mouseYDelta 0x31
  */
 typedef struct __attribute__((packed)) t_mos_sysvars_s {
     uint32_t time;           /* 0x00 +4: centiseconds since boot (~10 Hz timer) */
@@ -51,6 +53,16 @@ typedef struct __attribute__((packed)) t_mos_sysvars_s {
     uint16_t keydelay;       /* 0x20 +2: keyboard repeat delay                 */
     uint16_t keyrate;        /* 0x22 +2: keyboard repeat rate                  */
     uint8_t  keyled;         /* 0x24 +1: keyboard LED status                   */
+    uint8_t  rtcEnable;      /* 0x25 +1: RTC enable flag                       */
+    uint8_t  _pad26;         /* 0x26 +1: (reserved/spare)                      */
+    uint8_t  scrMode;        /* 0x27 +1: current screen mode number            */
+    uint8_t  _pad28;         /* 0x28 +1: (reserved/spare)                      */
+    uint16_t mouseX;         /* 0x29 +2: mouse X position                      */
+    uint16_t mouseY;         /* 0x2B +2: mouse Y position                      */
+    uint8_t  mouseButtons;   /* 0x2D +1: mouse button state                    */
+    uint8_t  mouseWheel;     /* 0x2E +1: mouse wheel delta                     */
+    uint16_t mouseXDelta;    /* 0x2F +2: mouse X delta                         */
+    uint16_t mouseYDelta;    /* 0x31 +2: mouse Y delta                         */
 } t_mos_sysvars;
 
 #endif /* MOS_SYSVARS_BLOCK_H */

@@ -164,12 +164,17 @@ static void mos_main_task(void *arg)
         }
     }
 #elif defined(CONFIG_MOS_NET_ETHERNET)
-    mos_printf("Starting Ethernet (IP101, RMII)...\r\n");
-    net_ok = mos_net_init(CONFIG_MOS_ETH_LINK_TIMEOUT_MS);
-    if (net_ok == 0) {
-        mos_printf("Ethernet OK  IP: %s\r\n", mos_net_ip());
-    } else {
-        mos_printf("Ethernet: no link (cable unplugged?) — continuing without network\r\n");
+    /* Ethernet: retry until link is up — VDP requires network.
+     * If the cable is not plugged in yet, keep trying every 10 s. */
+    while (net_ok != 0) {
+        mos_printf("Starting Ethernet (IP101, RMII)...\r\n");
+        net_ok = mos_net_init(CONFIG_MOS_ETH_LINK_TIMEOUT_MS);
+        if (net_ok == 0) {
+            mos_printf("Ethernet OK  IP: %s\r\n", mos_net_ip());
+        } else {
+            mos_printf("Ethernet: no link — retrying in 10s (plug cable?)\r\n");
+            vTaskDelay(pdMS_TO_TICKS(10000));
+        }
     }
 #else
     mos_printf("Network disabled\r\n");
@@ -186,20 +191,12 @@ static void mos_main_task(void *arg)
     }
 #endif
 
-    /* 6. VDP TCP server — requires network; skip if not available */
-    bool vdp_ok = false;
-    if (net_ok == 0) {
-        while (!vdp_ok) {
-            if (mos_vdp_init() == 0) {
-                vdp_ok = true;
-                mos_printf("VDP server on port %d - connect to start shell\r\n",
-                           MOS_VDP_TCP_PORT);
-            } else {
-                mos_printf("VDP server failed - retrying in 5s\r\n");
-                vTaskDelay(pdMS_TO_TICKS(5000));
-            }
-        }
+    /* 6. VDP TCP server — net_ok==0 guaranteed here (loops above never exit otherwise) */
+    while (mos_vdp_init() != 0) {
+        mos_printf("VDP server failed - retrying in 5s\r\n");
+        vTaskDelay(pdMS_TO_TICKS(5000));
     }
+    mos_printf("VDP server on port %d - connect to start shell\r\n", MOS_VDP_TCP_PORT);
 
     /* 7. MOS API jump table */
     mos_api_table_init();
@@ -208,17 +205,17 @@ static void mos_main_task(void *arg)
     /* 8. Shell init */
     mos_shell_init();
 
-    /* 9. Session loop - each VDP connection is one session */
+    /* 9. Session loop - each VDP connection is one session.
+     * vdp_ok is always true here (Ethernet loop above never exits without net).
+     * We wait for a VDP TCP client before starting each shell session. */
     while (1) {
-        if (vdp_ok) {
-            ESP_LOGI(TAG, "Waiting for VDP client on port %d...", MOS_VDP_TCP_PORT);
-            while (!mos_vdp_connected()) {
-                vTaskDelay(pdMS_TO_TICKS(100));
-            }
-            /* Give the VDP a moment to finish handshake before sending VDU codes */
-            vTaskDelay(pdMS_TO_TICKS(200));
-            ESP_LOGI(TAG, "VDP client connected - starting shell session");
+        ESP_LOGI(TAG, "Waiting for VDP client on port %d...", MOS_VDP_TCP_PORT);
+        while (!mos_vdp_connected()) {
+            vTaskDelay(pdMS_TO_TICKS(100));
         }
+        /* Give the VDP a moment to finish handshake before sending VDU codes */
+        vTaskDelay(pdMS_TO_TICKS(200));
+        ESP_LOGI(TAG, "VDP client connected - starting shell session");
 
         /* Welcome banner (includes CLS + colour reset) */
         print_banner();
@@ -236,12 +233,9 @@ static void mos_main_task(void *arg)
         /* Interactive shell - returns when VDP disconnects */
         mos_shell_run();
 
-        /* Session ended (VDP disconnected or EOF).
-         * Reset shell state so the next session starts with a clean slate:
-         * user variables freed, history cleared, cwd back to flash root. */
+        /* Session ended — reset shell state for next connection */
         mos_shell_reset();
-        ESP_LOGI(TAG, "Session reset — %s",
-                 vdp_ok ? "waiting for next VDP connection" : "restarting shell");
+        ESP_LOGI(TAG, "Session reset — waiting for next VDP connection");
     }
 }
 

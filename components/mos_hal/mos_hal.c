@@ -16,20 +16,12 @@
 #include "freertos/task.h"
 #include "freertos/semphr.h"
 #include "esp_log.h"
-#include "esp_vfs_dev.h"
-#include "esp_vfs_usb_serial_jtag.h"
-#include "driver/usb_serial_jtag.h"
 #include "driver/uart_vfs.h"
 #include "driver/uart.h"
 #include "mos_hal.h"
 #include "mos_vdp.h"
 
 static const char *TAG = "mos_hal";
-
-#if CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG
-/* One-byte pushback buffer for kbhit() + getch() coordination on USB-JTAG */
-static int  s_jtag_pushed  = -1;
-#endif
 
 /* Static printf buffer — keeps vsnprintf off the task stack.
  * Protected by a mutex so mos_printf is safe from multiple tasks. */
@@ -40,9 +32,13 @@ static SemaphoreHandle_t s_printf_mux = NULL;
 void mos_hal_console_init(void)
 {
 #if CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG
-    /* USB-JTAG CDC console (e.g. Olimex ESP32-P4-PC) */
-    esp_vfs_usb_serial_jtag_use_driver();
-    ESP_LOGI(TAG, "Console USB-JTAG/CDC ready");
+    /* USB-JTAG CDC console (e.g. Olimex ESP32-P4-PC).
+     * IDF configures the USB-JTAG VFS automatically when
+     * CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y — do NOT call
+     * esp_vfs_usb_serial_jtag_use_driver() here; that would
+     * re-install the driver and conflict with the already-running
+     * IDF logging infrastructure, breaking stdin/stdout. */
+    ESP_LOGI(TAG, "Console USB-JTAG/CDC (IDF-managed)");
 #else
     /* UART console (default for most boards) */
     uart_config_t cfg = {
@@ -84,19 +80,8 @@ int mos_getch(void)
          * in main.c to wait for the next VDP connection. */
         return mos_vdp_getch();
     }
-#if CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG
-    /* Return byte saved by kbhit(), or block-read a fresh one. */
-    if (s_jtag_pushed >= 0) {
-        int c = s_jtag_pushed;
-        s_jtag_pushed = -1;
-        return c;
-    }
-    uint8_t b;
-    while (usb_serial_jtag_read_bytes(&b, 1, portMAX_DELAY) < 1) {}
-    return (int)b;
-#else
+    /* Both USB-JTAG and UART go through the IDF VFS — getchar() works for both. */
     return getchar();
-#endif
 }
 
 bool mos_kbhit(void)
@@ -104,14 +89,13 @@ bool mos_kbhit(void)
     if (mos_vdp_connected()) {
         return mos_vdp_kbhit();
     }
-    /* Non-blocking check: peek at the underlying driver's RX buffer. */
 #if CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG
-    if (s_jtag_pushed >= 0) return true;
-    uint8_t peek;
-    if (usb_serial_jtag_read_bytes(&peek, 1, 0) > 0) {
-        s_jtag_pushed = peek;
-        return true;
-    }
+    /* USB-JTAG: stdin is non-blocking when IDF manages the driver.
+     * Use select() timeout=0 would be ideal, but IDF USB-JTAG VFS does not
+     * support select.  Poll with a 0-tick read via the raw driver is gone;
+     * instead we simply report false (no key) — the shell loop will call
+     * mos_getch() which blocks until a key arrives.  This is acceptable
+     * for interactive use; autoexec.bat doesn't use kbhit. */
     return false;
 #else
     size_t available = 0;

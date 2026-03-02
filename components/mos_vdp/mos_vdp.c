@@ -120,6 +120,13 @@ _Static_assert(offsetof(t_mos_sysvars, rtc)           == 0x1A, "sysvar_rtc");
 _Static_assert(offsetof(t_mos_sysvars, keydelay)      == 0x20, "sysvar_keydelay");
 _Static_assert(offsetof(t_mos_sysvars, keyrate)       == 0x22, "sysvar_keyrate");
 _Static_assert(offsetof(t_mos_sysvars, keyled)        == 0x24, "sysvar_keyled");
+_Static_assert(offsetof(t_mos_sysvars, scrMode)       == 0x27, "sysvar_scrMode");
+_Static_assert(offsetof(t_mos_sysvars, mouseX)        == 0x29, "sysvar_mouseX");
+_Static_assert(offsetof(t_mos_sysvars, mouseY)        == 0x2B, "sysvar_mouseY");
+_Static_assert(offsetof(t_mos_sysvars, mouseButtons)  == 0x2D, "sysvar_mouseButtons");
+_Static_assert(offsetof(t_mos_sysvars, mouseWheel)    == 0x2E, "sysvar_mouseWheel");
+_Static_assert(offsetof(t_mos_sysvars, mouseXDelta)   == 0x2F, "sysvar_mouseXDelta");
+_Static_assert(offsetof(t_mos_sysvars, mouseYDelta)   == 0x31, "sysvar_mouseYDelta");
 
 /* ------------------------------------------------------------------ */
 /* VDP protocol parser                                                  */
@@ -226,6 +233,7 @@ static bool proto_feed(vdp_proto_t *p, uint8_t byte, uint8_t *out_ascii)
                 s_sysvars.scrCols    = s_screen.cols;
                 s_sysvars.scrRows    = s_screen.rows;
                 s_sysvars.scrColours = s_screen.colours;
+                s_sysvars.scrMode    = s_screen.mode;
                 s_sysvars.vpd_pflags |= 0x10; /* vdp_pflag_mode */
                 ESP_LOGI(TAG, "MODE %u: %ux%u px, %ux%u chars, %u colours",
                          s_screen.mode, s_screen.width, s_screen.height,
