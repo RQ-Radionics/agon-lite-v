@@ -1,0 +1,100 @@
+menu "MOS Network"
+
+    choice MOS_NET_BACKEND
+        prompt "Network backend"
+        default MOS_NET_WIFI
+        help
+            Select the network interface to use for IP connectivity.
+            Only one backend is active at a time.
+
+        config MOS_NET_WIFI
+            bool "WiFi (via coprocessor)"
+            help
+                Use WiFi via the esp-hosted C6 coprocessor over SDIO.
+                Requires CONFIG_MOS_WIFI_ENABLED=y.
+                Suitable for boards with a C6 coprocessor (e.g. Waveshare ESP32-P4-WIFI6).
+
+        config MOS_NET_ETHERNET
+            bool "Ethernet (RMII)"
+            help
+                Use the on-chip EMAC with an external RMII PHY.
+                Suitable for boards with a wired Ethernet port
+                (e.g. Olimex ESP32-P4-PC with IP101GRR PHY).
+
+        config MOS_NET_NONE
+            bool "None (no network)"
+            help
+                Disable all networking. VDP, SNTP and WiFi features are skipped.
+
+    endchoice
+
+    if MOS_NET_ETHERNET
+
+        config MOS_ETH_PHY_ADDR
+            int "PHY address (MDIO)"
+            default 1
+            range 0 31
+            help
+                MDIO address of the Ethernet PHY chip.
+                Olimex ESP32-P4-PC: IP101GRR strapped to address 1.
+
+        config MOS_ETH_RMII_CLK_GPIO
+            int "RMII clock GPIO (50 MHz from PHY)"
+            default 50
+            help
+                GPIO receiving the 50 MHz reference clock from the PHY (RMII external clock mode).
+                Olimex ESP32-P4-PC: GPIO50 (RXCLK/50M_CLKO of IP101GRR).
+
+        config MOS_ETH_TXEN_GPIO
+            int "RMII TXEN GPIO"
+            default 33
+
+        config MOS_ETH_TXD0_GPIO
+            int "RMII TXD0 GPIO"
+            default 34
+
+        config MOS_ETH_TXD1_GPIO
+            int "RMII TXD1 GPIO"
+            default 35
+
+        config MOS_ETH_RXD0_GPIO
+            int "RMII RXD0 GPIO"
+            default 29
+
+        config MOS_ETH_RXD1_GPIO
+            int "RMII RXD1 GPIO"
+            default 30
+
+        config MOS_ETH_RXDV_GPIO
+            int "RMII RXDV (CRS_DV) GPIO"
+            default 28
+
+        config MOS_ETH_MDC_GPIO
+            int "MDC GPIO"
+            default 36
+
+        config MOS_ETH_MDIO_GPIO
+            int "MDIO GPIO"
+            default 37
+            help
+                MDIO management data GPIO.
+                Check schematic net 'MDIO' for the exact GPIO on your board.
+
+        config MOS_ETH_PHY_RST_GPIO
+            int "PHY RESET_N GPIO (-1 = not connected)"
+            default -1
+            help
+                GPIO driving the PHY RESET_N pin, active LOW.
+                Set to -1 if the PHY reset is not controllable from the ESP32.
+
+        config MOS_ETH_LINK_TIMEOUT_MS
+            int "Link-up timeout (ms)"
+            default 5000
+            help
+                Maximum time to wait for Ethernet link + DHCP IP assignment.
+                If the cable is unplugged, init returns -1 after this timeout
+                and the system continues without network.
+
+    endif
+
+endmenu

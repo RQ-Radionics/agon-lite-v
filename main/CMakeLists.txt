@@ -12,7 +12,7 @@ idf_component_register(
         mos_shell
         mos_api
         mos_loader
-        mos_wifi
+        mos_net
         mos_sntp
         mos_vdp
 )

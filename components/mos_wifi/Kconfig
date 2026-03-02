@@ -1,0 +1,11 @@
+menu "MOS WiFi"
+
+    config MOS_WIFI_ENABLED
+        bool
+        default y if MOS_NET_WIFI
+        default n
+        help
+            Automatically enabled when the network backend is WiFi
+            (CONFIG_MOS_NET_WIFI=y). Do not set this directly.
+
+endmenu

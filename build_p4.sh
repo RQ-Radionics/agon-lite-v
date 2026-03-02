@@ -4,7 +4,12 @@ set -e
 
 cd "$(dirname "$0")"
 
-echo "=== ESP32-P4 build ==="
+echo "=== ESP32-P4 (Waveshare P4-WIFI6) build ==="
+# CRITICAL: wipe any cached sdkconfig from a previous (Olimex) build.
+rm -f sdkconfig
+rm -rf build
+
+export SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.waveshare-p4wifi"
 idf.py set-target esp32p4
 idf.py build
 

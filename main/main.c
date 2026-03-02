@@ -25,7 +25,7 @@
 #include "mos_shell.h"
 #include "mos_api.h"
 #include "mos_loader.h"
-#include "mos_wifi.h"
+#include "mos_net.h"
 #include "mos_sntp.h"
 #include "mos_vdp.h"
 
@@ -76,8 +76,8 @@ static void print_banner(void)
                                                   : COL_RED   "FAIL" COL_BWHITE;
     const char *sd_s    = mos_fs_sd_mounted()    ? COL_GREEN "OK"   COL_BWHITE
                                                   : COL_WHITE "N/A"  COL_BWHITE;
-    const char *wifi_s  = mos_wifi_is_connected()? COL_GREEN "OK"   COL_BWHITE
-                                                  : COL_RED   "FAIL" COL_BWHITE;
+    const char *wifi_s  = mos_net_is_connected() ? COL_GREEN "OK"   COL_BWHITE
+                                                 : COL_RED   "FAIL" COL_BWHITE;
 
     /* Switch to 16-colour mode (VDU 22, 0).
      * Cannot embed 0x00 in a string literal so send the two bytes manually.
@@ -108,7 +108,14 @@ static void print_banner(void)
     mos_printf("\r\n");
 }
 
-void app_main(void)
+/* ------------------------------------------------------------------ */
+/* Main logic — runs in a task with a large PSRAM stack so that        */
+/* esp_netif / Ethernet init / vfprintf don't overflow the tiny        */
+/* app_main stack on RISC-V (each frame is much larger than Xtensa).  */
+/* ------------------------------------------------------------------ */
+#define MOS_MAIN_STACK_KB   96
+
+static void mos_main_task(void *arg)
 {
     /* 0. NVS - must be initialised before WiFi */
     esp_err_t nvs_err = nvs_flash_init();
@@ -134,17 +141,21 @@ void app_main(void)
         ESP_LOGW(TAG, "SD card not available");
     }
 
-    /* 4. WiFi — retry until connected (VDP over TCP requires network).
-     * On ESP32-P4 this uses esp_wifi_remote via ESP32-C6 coprocessor (SDIO).
-     * We loop with increasing back-off: 15 s first attempt, then 30 s each. */
-    int wifi_ok = -1;
+    /* 4. Network — bring up IP connectivity (WiFi, Ethernet, or none).
+     * Backend is selected at compile time via CONFIG_MOS_NET_BACKEND.
+     *   WiFi:     retry indefinitely (VDP over TCP needs network).
+     *   Ethernet: single attempt with timeout; continue without network
+     *             if no cable is plugged in — shell still works locally.
+     *   None:     skip entirely. */
+    int net_ok = -1;
+#if defined(CONFIG_MOS_NET_WIFI)
     {
         uint32_t delay_ms = 15000;
-        while (wifi_ok != 0) {
+        while (net_ok != 0) {
             mos_printf("Connecting to WiFi...\r\n");
-            wifi_ok = mos_wifi_init(delay_ms);
-            if (wifi_ok == 0) {
-                mos_printf("WiFi OK  IP: %s\r\n", mos_wifi_ip());
+            net_ok = mos_net_init(delay_ms);
+            if (net_ok == 0) {
+                mos_printf("WiFi OK  IP: %s\r\n", mos_net_ip());
             } else {
                 mos_printf("WiFi FAIL - retrying in 30s\r\n");
                 delay_ms = 30000;
@@ -152,24 +163,41 @@ void app_main(void)
             }
         }
     }
-
-    /* 5. SNTP - WiFi is up; wait up to 10 s */
-    if (mos_sntp_init(NULL, 10000) == 0) {
-        mos_printf("Clock synced via NTP\r\n");
+#elif defined(CONFIG_MOS_NET_ETHERNET)
+    mos_printf("Starting Ethernet (IP101, RMII)...\r\n");
+    net_ok = mos_net_init(CONFIG_MOS_ETH_LINK_TIMEOUT_MS);
+    if (net_ok == 0) {
+        mos_printf("Ethernet OK  IP: %s\r\n", mos_net_ip());
     } else {
-        mos_printf("NTP sync timeout - clock not set\r\n");
+        mos_printf("Ethernet: no link (cable unplugged?) — continuing without network\r\n");
     }
+#else
+    mos_printf("Network disabled\r\n");
+#endif
 
-    /* 6. VDP TCP server — must succeed; retry if it fails */
-    bool vdp_ok = false;
-    while (!vdp_ok) {
-        if (mos_vdp_init() == 0) {
-            vdp_ok = true;
-            mos_printf("VDP server on port %d - connect to start shell\r\n",
-                       MOS_VDP_TCP_PORT);
+    /* 5. SNTP — only if we have a network */
+#if !defined(CONFIG_MOS_NET_NONE)
+    if (net_ok == 0) {
+        if (mos_sntp_init(NULL, 10000) == 0) {
+            mos_printf("Clock synced via NTP\r\n");
         } else {
-            mos_printf("VDP server failed - retrying in 5s\r\n");
-            vTaskDelay(pdMS_TO_TICKS(5000));
+            mos_printf("NTP sync timeout - clock not set\r\n");
+        }
+    }
+#endif
+
+    /* 6. VDP TCP server — requires network; skip if not available */
+    bool vdp_ok = false;
+    if (net_ok == 0) {
+        while (!vdp_ok) {
+            if (mos_vdp_init() == 0) {
+                vdp_ok = true;
+                mos_printf("VDP server on port %d - connect to start shell\r\n",
+                           MOS_VDP_TCP_PORT);
+            } else {
+                mos_printf("VDP server failed - retrying in 5s\r\n");
+                vTaskDelay(pdMS_TO_TICKS(5000));
+            }
         }
     }
 
@@ -212,6 +240,29 @@ void app_main(void)
          * Reset shell state so the next session starts with a clean slate:
          * user variables freed, history cleared, cwd back to flash root. */
         mos_shell_reset();
-        ESP_LOGI(TAG, "Session reset — waiting for next VDP connection");
+        ESP_LOGI(TAG, "Session reset — %s",
+                 vdp_ok ? "waiting for next VDP connection" : "restarting shell");
+    }
+}
+
+/* ------------------------------------------------------------------ */
+/* app_main — minimal launcher; immediately spawns mos_main_task with  */
+/* a large PSRAM stack to avoid stack overflow on RISC-V ESP32-P4      */
+/* where each call frame is much larger than on Xtensa.               */
+/* ------------------------------------------------------------------ */
+void app_main(void)
+{
+    /* Allocate stack in PSRAM so internal SRAM isn't exhausted. */
+    StaticTask_t *tcb = heap_caps_malloc(sizeof(StaticTask_t), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    StackType_t  *stack = heap_caps_malloc(MOS_MAIN_STACK_KB * 1024, MALLOC_CAP_SPIRAM);
+
+    if (!tcb || !stack) {
+        /* Last-resort: fall back to dynamic allocation from any available RAM */
+        ESP_LOGE("app_main", "PSRAM stack alloc failed — falling back to xTaskCreate");
+        xTaskCreate(mos_main_task, "mos_main", MOS_MAIN_STACK_KB * 1024, NULL, 5, NULL);
+    } else {
+        xTaskCreateStatic(mos_main_task, "mos_main",
+                          MOS_MAIN_STACK_KB * 1024, NULL, 5,
+                          stack, tcb);
     }
 }

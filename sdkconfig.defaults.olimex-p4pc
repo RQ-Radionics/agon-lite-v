@@ -1,0 +1,68 @@
+# ESP32-MOS — Olimex ESP32-P4-PC target-specific settings
+#
+# Board: Olimex ESP32-P4-PC
+#   Chip:  ESP32-P4NRW32 (dual-core RISC-V 400 MHz, 768 KB RAM, 32 MB PSRAM)
+#   Flash: 16 MB SPI
+#   WiFi:  none (P4NRW32 has no wireless coprocessor)
+#   USB:   USB-JTAG via USB-C (programming + console)
+#   ETH:   internal RMII MAC + external PHY
+#   SD:    SDMMC slot 0, GPIO 39-44, PWR GPIO 45 (active LOW)
+#   Audio: ES8311 codec, I2C0 GPIO7/8, I2S0 GPIO9-13
+
+# Main task stack — BBC BASIC (bbeval/bbexec) recurse deeply on RISC-V ABI.
+# On RISC-V the ABI uses more stack than Xtensa; vfprintf alone can consume
+# several KB. 64KB gives comfortable headroom for boot + Ethernet init + shell.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=65536
+
+# Chip revision: Olimex uses ESP32-P4NRW32 rev 1.x silicon
+# v1.x and v3.x are mutually exclusive silicon families; select <v3 mode.
+CONFIG_ESP32P4_SELECTS_REV_LESS_V3=y
+CONFIG_ESP32P4_REV_MIN_1=y
+CONFIG_ESP32P4_REV_MIN_FULL=1
+
+# Flash: 16 MB
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="16MB"
+
+# PSRAM: Hex-line 200 MHz (ESP32-P4 16-line interface)
+CONFIG_SPIRAM_MODE_HEX=y
+CONFIG_SPIRAM_SPEED_200M=y
+
+# Disable PMP memory protection: user programs execute from PSRAM
+# CONFIG_ESP_SYSTEM_MEMPROT_FEATURE is not set
+
+# Network: use Ethernet (RMII, IP101GRR PHY) — no WiFi coprocessor on this board.
+CONFIG_MOS_NET_ETHERNET=y
+
+# Ethernet pin mapping for Olimex ESP32-P4-PC Rev B (from schematic)
+CONFIG_MOS_ETH_PHY_ADDR=1
+CONFIG_MOS_ETH_RMII_CLK_GPIO=50
+CONFIG_MOS_ETH_TXEN_GPIO=33
+CONFIG_MOS_ETH_TXD0_GPIO=34
+CONFIG_MOS_ETH_TXD1_GPIO=35
+CONFIG_MOS_ETH_RXD0_GPIO=29
+CONFIG_MOS_ETH_RXD1_GPIO=30
+CONFIG_MOS_ETH_RXDV_GPIO=28
+CONFIG_MOS_ETH_MDC_GPIO=36
+CONFIG_MOS_ETH_MDIO_GPIO=37
+CONFIG_MOS_ETH_PHY_RST_GPIO=-1
+# Wait up to 5 s for link + DHCP; continue without network if cable is unplugged
+CONFIG_MOS_ETH_LINK_TIMEOUT_MS=5000
+
+# esp-hosted / WiFi coprocessor — this board has no C6 coprocessor.
+# The managed component enables itself by default; override to disable.
+# Kconfig uses "# CONFIG_x is not set" to reliably disable a boolean.
+# CONFIG_ESP_HOSTED_ENABLED is not set
+
+# Console: use built-in USB Serial/JTAG (USB-C connector on the board)
+# Primary UART console is disabled; JTAG port acts as both debugger and monitor.
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
+
+# Ethernet: enable internal EMAC (RMII, external PHY via GPIO matrix)
+CONFIG_ETH_ENABLED=y
+CONFIG_ETH_USE_ESP32_EMAC=y
+CONFIG_ETH_PHY_INTERFACE_RMII=y
+CONFIG_ETH_DMA_BUFFER_SIZE=512
+CONFIG_ETH_DMA_RX_BUFFER_NUM=20
+CONFIG_ETH_DMA_TX_BUFFER_NUM=10

@@ -4,7 +4,15 @@
  * Connects to the AP defined in wifi_credentials.h using the ESP-IDF
  * WiFi + netif stack.  Uses a FreeRTOS EventGroup to signal when an IP
  * address has been assigned (or when the connection permanently fails).
+ *
+ * When CONFIG_MOS_WIFI_ENABLED=n this entire file compiles to nothing;
+ * the inline stubs in mos_wifi.h satisfy all callers.
  */
+
+#include "sdkconfig.h"
+#include "mos_wifi.h"
+
+#if CONFIG_MOS_WIFI_ENABLED
 
 #include <string.h>
 #include <stdint.h>
@@ -17,7 +25,6 @@
 #include "lwip/ip4_addr.h"
 
 #include "wifi_credentials.h"
-#include "mos_wifi.h"
 
 static const char *TAG = "mos_wifi";
 
@@ -147,3 +154,5 @@ const char *mos_wifi_ip(void)
 {
     return (s_ip[0] != '\0') ? s_ip : NULL;
 }
+
+#endif /* CONFIG_MOS_WIFI_ENABLED */

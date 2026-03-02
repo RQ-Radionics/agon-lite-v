@@ -15,10 +15,17 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 PORT="${1:-${ESPPORT:-/dev/cu.usbserial-0001}}"
-CHIP="${2:-esp32s3}"
+BOARD="${2:-esp32s3}"
+
+# Map board names to esptool chip identifiers
+case "${BOARD}" in
+    olimex-p4pc)        CHIP="esp32p4" ;;
+    esp32p4|esp32s3)    CHIP="${BOARD}" ;;
+    *)                  CHIP="${BOARD}" ;;
+esac
 
 DATA_COMMON="${SCRIPT_DIR}/data/common"
-DATA_TARGET="${SCRIPT_DIR}/data/${CHIP}"
+DATA_TARGET="${SCRIPT_DIR}/data/${BOARD}"
 BUILD_DIR="${SCRIPT_DIR}/build"
 STAGING="${BUILD_DIR}/data_staging"
 FAT_RAW="${BUILD_DIR}/fat_raw.bin"
@@ -50,7 +57,7 @@ if [ ! -d "${DATA_COMMON}" ]; then
 fi
 
 if [ ! -d "${DATA_TARGET}" ]; then
-    echo "ERROR: data/${CHIP}/ directory not found at ${DATA_TARGET}"
+    echo "ERROR: data/${BOARD}/ directory not found at ${DATA_TARGET}"
     echo "  Build SDK binaries first: cd sdk && make TARGET=${CHIP}"
     exit 1
 fi
@@ -75,13 +82,13 @@ fi
 mkdir -p "${BUILD_DIR}"
 
 # ---- step 0: merge common + target into staging directory ----
-echo "Staging data for ${CHIP} ..."
+echo "Staging data for ${BOARD} (chip: ${CHIP}) ..."
 rm -rf "${STAGING}"
 mkdir -p "${STAGING}"
 cp "${DATA_COMMON}"/* "${STAGING}/" 2>/dev/null || true
 cp "${DATA_TARGET}"/* "${STAGING}/" 2>/dev/null || true
 echo "  common: $(ls "${DATA_COMMON}" 2>/dev/null | wc -l | tr -d ' ') files"
-echo "  ${CHIP}: $(ls "${DATA_TARGET}" 2>/dev/null | wc -l | tr -d ' ') files"
+  echo "  ${BOARD}: $(ls "${DATA_TARGET}" 2>/dev/null | wc -l | tr -d ' ') files"
 
 # ---- step 1: build raw FAT image (no --wl_mode) ----
 # fatfsgen.py --wl_mode does NOT generate the WL state/config blocks that the
