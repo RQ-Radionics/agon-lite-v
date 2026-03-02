@@ -29,9 +29,18 @@ void mos_uart_set_pins(int tx_gpio, int rx_gpio)
 
 int mos_uopen(uint32_t baud)
 {
+    /* Reject clearly invalid baud rates before touching the hardware.
+     * agon-mos passes actual baud values (9600, 115200, etc.).
+     * Values below 300 are not real baud rates and would cause ESP_FAIL. */
+    if (baud < 300 || baud > 5000000) {
+        ESP_LOGE(TAG, "uopen: invalid baud rate %lu", (unsigned long)baud);
+        return -1;
+    }
+
     if (s_open) {
         /* already open — reconfigure baud rate without full reinstall */
         uart_set_baudrate(MOS_UART_PORT, baud);
+        ESP_LOGI(TAG, "UART1 baud rate updated to %lu", (unsigned long)baud);
         return 0;
     }
 

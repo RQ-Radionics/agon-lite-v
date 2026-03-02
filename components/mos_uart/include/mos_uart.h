@@ -27,14 +27,17 @@
 /* ── Default GPIO pins ─────────────────────────────────────────────────── */
 #ifndef MOS_UART_TX_GPIO
 #  if CONFIG_IDF_TARGET_ESP32P4
-#    define MOS_UART_TX_GPIO  38   /* Waveshare ESP32-P4-WIFI6 header pin */
+    /* GPIO15/16: free header pins on Waveshare ESP32-P4-WIFI6.
+     * Avoided: GPIO7-8 (I2C), GPIO9-13 (I2S/codec), GPIO39-44 (SDIO/WiFi),
+     *          GPIO53 (PA_ctrl), GPIO54 (SDIO reset), GPIO37-38 (used internally). */
+#    define MOS_UART_TX_GPIO  15
 #  else
 #    define MOS_UART_TX_GPIO  17   /* ESP32-S3 DevKit */
 #  endif
 #endif
 #ifndef MOS_UART_RX_GPIO
 #  if CONFIG_IDF_TARGET_ESP32P4
-#    define MOS_UART_RX_GPIO  37   /* Waveshare ESP32-P4-WIFI6 header pin */
+#    define MOS_UART_RX_GPIO  16
 #  else
 #    define MOS_UART_RX_GPIO  18   /* ESP32-S3 DevKit */
 #  endif
