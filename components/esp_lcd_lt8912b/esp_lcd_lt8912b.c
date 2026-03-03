@@ -211,20 +211,25 @@ static esp_err_t lt8912b_write_video_timing(void)
 
 /* Step 4: DDS configuration (ADDR_CEC_DSI = 0x49)
  *
- * Values from upstream Linux kernel lt8912_write_dds_config().
- * The DDS table (0x1F-0x2E, 0x42-0x5C) is board-agnostic; the HDMI
- * TMDS clock is derived from the DSI input clock, not the crystal.
- * The strm_sw_freq_word (0x4E-0x50) = pclk_mhz * 0x16C16 (Espressif formula).
- *   800x600@40MHz: 40 * 0x16C16 = 0x38E370 → [7:0]=0x70, [15:8]=0xE3, [23:16]=0x38
+ * Values taken verbatim from upstream Linux kernel lt8912_write_dds_config()
+ * (drivers/gpu/drm/bridge/lontium-lt8912b.c).  The DDS reference table
+ * (0x1F–0x2E, 0x42–0x5C) is independent of pixel clock — it programs the
+ * internal PLL fractional divider reference, not the output frequency directly.
+ * The TMDS clock is ultimately derived from the DSI lane clock, not the crystal.
+ *
+ * The strm_sw_freq_word (0x4E–0x50) in the Linux driver is also fixed
+ * (0xFF, 0x56, 0x69) and does NOT vary with pixel clock.  Earlier code used a
+ * formula (pclk_mhz * 0x16C16) that does not appear in any Lontium reference
+ * and caused the HDMI PLL to not lock — resulting in no signal.
  */
 static esp_err_t lt8912b_write_dds_config(void)
 {
     i2c_master_dev_handle_t d = s_lt.dev_cec_dsi;
 
-    /* strm_sw_freq_word[23:0] with enable=0x80 in MSB reg */
-    ESP_RETURN_ON_ERROR(lt_write(d, 0x4E, 0x70), TAG, "dds 4E");
-    ESP_RETURN_ON_ERROR(lt_write(d, 0x4F, 0xE3), TAG, "dds 4F");
-    ESP_RETURN_ON_ERROR(lt_write(d, 0x50, 0x38), TAG, "dds 50");
+    /* strm_sw_freq_word — fixed values from Linux kernel driver */
+    ESP_RETURN_ON_ERROR(lt_write(d, 0x4E, 0xFF), TAG, "dds 4E");
+    ESP_RETURN_ON_ERROR(lt_write(d, 0x4F, 0x56), TAG, "dds 4F");
+    ESP_RETURN_ON_ERROR(lt_write(d, 0x50, 0x69), TAG, "dds 50");
     ESP_RETURN_ON_ERROR(lt_write(d, 0x51, 0x80), TAG, "dds 51 arm");
 
     /* Internal timing reference table */

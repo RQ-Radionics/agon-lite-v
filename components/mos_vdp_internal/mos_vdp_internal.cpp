@@ -5,11 +5,12 @@
  * in PSRAM, outputting through the ESP32-P4 DPI controller → LT8912B → HDMI.
  *
  * Supported:
- *   - Text rendering (80×60 chars, 8×8 font, 16 colours, mode 0)
+ *   - Text rendering (100×75 chars, 8×8 font, 16 colours, 800×600 mode)
  *   - VDU 4/5/7/8/9/10/11/12/13/14/15/16/17/18/19/22/23/25/28/29/30/31
  *   - PS/2 Set 2 keyboard → ASCII + modifier decoding
  *
  * Board: Olimex ESP32-P4-PC
+ * Output: 800×600@60Hz VESA over HDMI via LT8912B DSI bridge
  */
 
 #include "mos_vdp_internal.h"
@@ -34,15 +35,27 @@ static const char *TAG = "vdp_int";
 
 /* ------------------------------------------------------------------ */
 /* Screen geometry                                                      */
+/*                                                                      */
+/* Physical framebuffer is always 800×600 — the maximum Agon mode.     */
+/* All 18 Agon video modes are rendered within this framebuffer; lower  */
+/* resolution modes use a sub-region (COLS/ROWS reflect active mode).  */
+/* The DPI controller always outputs 800×600@60Hz VESA to the LT8912B. */
 /* ------------------------------------------------------------------ */
-#define SCREEN_W        640
-#define SCREEN_H        480
+#define FB_W            800
+#define FB_H            600
 #define FONT_W          8
 #define FONT_H          8
-#define COLS            (SCREEN_W / FONT_W)   /* 80 */
-#define ROWS            (SCREEN_H / FONT_H)   /* 60 */
 #define BYTES_PER_PIX   3                     /* RGB888 */
-#define FB_SIZE         (SCREEN_W * SCREEN_H * BYTES_PER_PIX)  /* 921600 */
+#define FB_SIZE         (FB_W * FB_H * BYTES_PER_PIX)  /* 1440000 */
+
+/* Active mode dimensions — updated by VDU 22 (mode switch).
+ * Default mode 0 = 640×480 (Agon standard).
+ * Maximum mode = 800×600.
+ * COLS/ROWS are always derived from the active mode width/height.      */
+static int s_mode_w = 640;   /* active mode pixel width  */
+static int s_mode_h = 480;   /* active mode pixel height */
+#define COLS            (s_mode_w / FONT_W)
+#define ROWS            (s_mode_h / FONT_H)
 
 /* ------------------------------------------------------------------ */
 /* Agon 16-colour palette (defaultPalette10 mapped through colourLookup)
@@ -105,15 +118,17 @@ static SemaphoreHandle_t s_fb_mutex = NULL; /* protects back-buffer access */
 
 static inline void fb_plot_pixel(int x, int y, rgb888_t c)
 {
-    if ((unsigned)x >= SCREEN_W || (unsigned)y >= SCREEN_H) return;
-    uint8_t *p = s_fb[s_back] + (y * SCREEN_W + x) * BYTES_PER_PIX;
+    if ((unsigned)x >= (unsigned)s_mode_w || (unsigned)y >= (unsigned)s_mode_h) return;
+    /* Stride is always FB_W (physical framebuffer width = 800) */
+    uint8_t *p = s_fb[s_back] + (y * FB_W + x) * BYTES_PER_PIX;
     p[0] = c.r; p[1] = c.g; p[2] = c.b;
 }
 
 static void fb_flip(void)
 {
     if (!s_panel) return;
-    esp_lcd_panel_draw_bitmap(s_panel, 0, 0, SCREEN_W, SCREEN_H, s_fb[s_back]);
+    /* Always push the full physical framebuffer — DPI outputs FB_W×FB_H */
+    esp_lcd_panel_draw_bitmap(s_panel, 0, 0, FB_W, FB_H, s_fb[s_back]);
     s_back ^= 1;
 }
 
@@ -124,9 +139,9 @@ static int  s_col = 0, s_row = 0;
 static int  s_fg  = 15;   /* bright white */
 static int  s_bg  = 0;    /* black */
 
-/* Viewport — default = full screen */
+/* Viewport — default = full mode area; reset on mode change */
 static int s_vp_left = 0, s_vp_top = 0;
-static int s_vp_right = COLS - 1, s_vp_bottom = ROWS - 1;
+static int s_vp_right = 79, s_vp_bottom = 59;  /* updated in mode_set() */
 
 /* ------------------------------------------------------------------ */
 /* Low-level character rendering                                        */
@@ -151,9 +166,11 @@ static void draw_char(int col, int row, uint8_t c)
 static void clear_screen(void)
 {
     rgb888_t bg = s_palette[s_bg & 0xF];
-    /* Fill entire framebuffer with bg colour */
+    /* Fill the full physical framebuffer (FB_W × FB_H) with bg colour.
+     * Pixels outside the active mode area are black by convention but
+     * clearing the full buffer avoids stale pixels at mode boundaries. */
     uint8_t *p = s_fb[s_back];
-    for (int i = 0; i < SCREEN_W * SCREEN_H; i++) {
+    for (int i = 0; i < FB_W * FB_H; i++) {
         p[0] = bg.r; p[1] = bg.g; p[2] = bg.b;
         p += BYTES_PER_PIX;
     }
@@ -161,8 +178,9 @@ static void clear_screen(void)
 
 static void scroll_up(void)
 {
-    /* Scroll viewport region up one character line */
-    int row_bytes = SCREEN_W * BYTES_PER_PIX;
+    /* Scroll viewport region up one character line.
+     * Stride is always FB_W (physical framebuffer pitch = 800 pixels). */
+    int row_bytes  = FB_W * BYTES_PER_PIX;          /* physical row stride */
     int char_bytes = FONT_H * row_bytes;
 
     int vp_y0 = s_vp_top  * FONT_H;
@@ -171,29 +189,31 @@ static void scroll_up(void)
     int vp_x1 = (s_vp_right + 1) * FONT_W;
     int vp_w  = vp_x1 - vp_x0;
 
-    /* If viewport is full width, we can use a single memmove */
+    /* If viewport spans the full mode width we can memmove entire rows
+     * (stride = FB_W so rows are contiguous in memory even if mode_w < FB_W,
+     * but the extra pixels at the right are also moved — acceptable) */
     if (s_vp_left == 0 && s_vp_right == COLS - 1) {
         uint8_t *dst = s_fb[s_back] + vp_y0 * row_bytes;
         uint8_t *src = dst + char_bytes;
         int move_bytes = (vp_y1 - vp_y0 - FONT_H) * row_bytes;
         if (move_bytes > 0) memmove(dst, src, move_bytes);
-        /* Clear bottom line */
+        /* Clear bottom character line (full physical width) */
         rgb888_t bg = s_palette[s_bg & 0xF];
         uint8_t *bot = s_fb[s_back] + (vp_y1 - FONT_H) * row_bytes;
-        for (int i = 0; i < FONT_H * SCREEN_W; i++) {
+        for (int i = 0; i < FONT_H * FB_W; i++) {
             bot[0] = bg.r; bot[1] = bg.g; bot[2] = bg.b;
             bot += BYTES_PER_PIX;
         }
     } else {
-        /* Partial-width viewport: row by row */
+        /* Partial-width viewport: copy row by row using physical stride */
         for (int y = vp_y0; y < vp_y1 - FONT_H; y++) {
-            uint8_t *dst = s_fb[s_back] + (y * SCREEN_W + vp_x0) * BYTES_PER_PIX;
+            uint8_t *dst = s_fb[s_back] + (y * FB_W + vp_x0) * BYTES_PER_PIX;
             uint8_t *src = dst + char_bytes;
             memmove(dst, src, vp_w * BYTES_PER_PIX);
         }
         rgb888_t bg = s_palette[s_bg & 0xF];
         for (int y = vp_y1 - FONT_H; y < vp_y1; y++) {
-            uint8_t *p = s_fb[s_back] + (y * SCREEN_W + vp_x0) * BYTES_PER_PIX;
+            uint8_t *p = s_fb[s_back] + (y * FB_W + vp_x0) * BYTES_PER_PIX;
             for (int x = 0; x < vp_w; x++) {
                 p[0] = bg.r; p[1] = bg.g; p[2] = bg.b;
                 p += BYTES_PER_PIX;
@@ -431,9 +451,42 @@ static void vdu_process(uint8_t c)
     }
 
     /* ---- VDU 22: MODE n ---- */
-    case VDU_STATE_VDU22:
-        /* We only support mode 0 (640×480 16-colour); accept any mode request
-         * but stay at 640×480 — reset state regardless */
+    case VDU_STATE_VDU22: {
+        /* Agon video modes (standard set):
+         *   0  = 640×480  16-colour
+         *   1  = 640×480   4-colour
+         *   2  = 640×480   2-colour
+         *   3  = 640×240  64-colour
+         *   4  = 640×240  16-colour
+         *   5  = 640×240   4-colour
+         *   6  = 640×240   2-colour
+         *   8  = 320×240  64-colour
+         *   9  = 320×240  16-colour
+         *  10  = 320×240   4-colour
+         *  11  = 320×240   2-colour
+         *  12  = 320×200  64-colour
+         *  13  = 320×200  16-colour
+         *  14  = 320×200   4-colour
+         *  15  = 320×200   2-colour
+         *  16  = 800×600  16-colour  ← maximum, fills full framebuffer
+         *  17  = 800×600   4-colour
+         *  18  = 800×600   2-colour
+         * All modes are rendered in the 800×600 physical framebuffer.
+         * Lower-resolution modes occupy a sub-region (top-left aligned).
+         * Colour depth is noted but we always use the 16-colour palette. */
+        /* Pixel dimensions for each Agon mode 0..18 */
+        static const struct { int w; int h; } mode_dims[] = {
+            {640,480},{640,480},{640,480},  /* 0-2  */
+            {640,240},{640,240},{640,240},{640,240}, /* 3-6 */
+            {640,480},                               /* 7   fallback */
+            {320,240},{320,240},{320,240},{320,240}, /* 8-11 */
+            {320,200},{320,200},{320,200},{320,200}, /* 12-15 */
+            {800,600},{800,600},{800,600},           /* 16-18 */
+        };
+        int mode = (int)c;
+        if (mode < 0 || mode > 18) mode = 0;
+        s_mode_w = mode_dims[mode].w;
+        s_mode_h = mode_dims[mode].h;
         palette_reset();
         s_fg = 15; s_bg = 0;
         s_vp_left = 0; s_vp_top = 0;
@@ -443,6 +496,7 @@ static void vdu_process(uint8_t c)
         fb_flip();
         s_vdu_state = VDU_STATE_NORMAL;
         break;
+    }
 
     /* ---- VDU 23: redefine char / system ---- */
     case VDU_STATE_VDU23_1:
@@ -476,8 +530,8 @@ static void vdu_process(uint8_t c)
             int16_t y = (int16_t)(s_arg[3] | (c << 8));
             /* Agon graphics origin is bottom-left; flip Y */
             int px = (int)x;
-            int py = SCREEN_H - 1 - (int)y;
-            if (px >= 0 && px < SCREEN_W && py >= 0 && py < SCREEN_H) {
+            int py = s_mode_h - 1 - (int)y;
+            if (px >= 0 && px < s_mode_w && py >= 0 && py < s_mode_h) {
                 fb_plot_pixel(px, py, s_palette[s_fg & 0xF]);
                 fb_flip();
             }
@@ -700,7 +754,9 @@ esp_err_t mos_vdp_internal_init(esp_lcd_panel_handle_t dpi_panel)
         ESP_LOGW(TAG, "No DPI panel — framebuffer output disabled");
     }
 
-    /* Reset palette and screen state */
+    /* Reset palette and screen state — default mode 0 = 640×480 */
+    s_mode_w = 640;
+    s_mode_h = 480;
     palette_reset();
     s_fg = 15; s_bg = 0;
     s_vp_left = 0; s_vp_top = 0;
@@ -757,8 +813,8 @@ esp_err_t mos_vdp_internal_init(esp_lcd_panel_handle_t dpi_panel)
     }
 
     s_initialized = true;
-    ESP_LOGI(TAG, "Internal VDP ready — %dx%d %d cols×%d rows",
-             SCREEN_W, SCREEN_H, COLS, ROWS);
+    ESP_LOGI(TAG, "Internal VDP ready — fb=%dx%d mode=%dx%d (%d cols×%d rows)",
+             FB_W, FB_H, s_mode_w, s_mode_h, COLS, ROWS);
     return ESP_OK;
 }
 
