@@ -341,7 +341,17 @@ static void mos_main_task(void *arg)
      * crash — otherwise the panic backtrace is lost before it can be sent. */
     vTaskDelay(pdMS_TO_TICKS(2000));
 
-    /* 1b. HDMI output (Olimex ESP32-P4-PC only) — independent of VDP/network.
+    /* 1b. Audio codec (ES8311) — initialised FIRST, before HDMI, with its
+     *     own I2C bus.  This isolates audio init from any bus-sharing side
+     *     effects and lets us confirm the codec works independently.
+     *     TODO: once confirmed working, re-integrate with shared I2C bus. */
+#ifdef CONFIG_MOS_AUDIO_ENABLED
+    if (mos_audio_init() != ESP_OK) {
+        ESP_LOGW(TAG, "Audio init failed — continuing without audio");
+    }
+#endif
+
+    /* 1c. HDMI output (Olimex ESP32-P4-PC only) — independent of VDP/network.
      *     Initializes DSI bus + LT8912B registers for 800x600@60Hz output.
      *     Returns the DPI panel handle (double-buffered) for mos_vdp_internal.
      *     Non-fatal: if HDMI init fails, rest of the system continues normally. */
@@ -351,7 +361,7 @@ static void mos_main_task(void *arg)
     esp_lcd_panel_handle_t dpi_panel = NULL;
 #endif
 
-    /* 1b2. Internal VDP — framebuffer renderer over HDMI (Olimex only).
+    /* 1c2. Internal VDP — framebuffer renderer over HDMI (Olimex only).
      *      Must come after hdmi_init() since it uses the DPI panel handle.
      *      Non-fatal: if init fails, system continues (TCP VDP still works). */
 #ifdef CONFIG_MOS_VDP_INTERNAL_ENABLED
@@ -361,23 +371,8 @@ static void mos_main_task(void *arg)
             ESP_LOGE(TAG, "Internal VDP init failed (0x%x %s) — no HDMI output",
                      vdp_ret, esp_err_to_name(vdp_ret));
         } else {
-            ESP_LOGI(TAG, "Internal VDP init OK — s_initialized should be true");
+            ESP_LOGI(TAG, "Internal VDP init OK");
         }
-    }
-#endif
-
-    /* 1c. Audio codec (ES8311).
-     *     When LT8912B is enabled, both chips share the same I2C bus.
-     *     The bus was created once in hdmi_init() and stored in s_shared_i2c_bus.
-     *     We add the ES8311 device to that same bus handle — no new bus needed,
-     *     no FSM state conflict. */
-#ifdef CONFIG_MOS_AUDIO_ENABLED
-#  ifdef CONFIG_LT8912B_ENABLED
-    if (mos_audio_init_with_bus(s_shared_i2c_bus) != ESP_OK) {
-#  else
-    if (mos_audio_init() != ESP_OK) {
-#  endif
-        ESP_LOGW(TAG, "Audio init failed — continuing without audio");
     }
 #endif
 
