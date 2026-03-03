@@ -744,20 +744,24 @@ esp_err_t mos_vdp_internal_init(esp_lcd_panel_handle_t dpi_panel)
 
     s_panel = dpi_panel;
 
-    /* Obtain framebuffer pointers from DPI panel (double-buffered) */
+    /* Obtain framebuffer pointers from DPI panel (double-buffered).
+     * Non-fatal: if the panel or get_frame_buffer fails, we continue
+     * without a framebuffer.  The shell still runs (I/O via UART or TCP);
+     * fb_flush() is a no-op when s_fb[0] == NULL. */
     if (s_panel) {
         void *fb0 = NULL, *fb1 = NULL;
         esp_err_t ret = esp_lcd_dpi_panel_get_frame_buffer(s_panel, 2, &fb0, &fb1);
         if (ret != ESP_OK) {
-            ESP_LOGE(TAG, "Failed to get framebuffers: 0x%x", ret);
-            return ret;
+            ESP_LOGE(TAG, "get_frame_buffer failed (0x%x) — HDMI output disabled", ret);
+            s_panel = NULL;   /* disable fb_flush() */
+        } else {
+            s_fb[0] = (uint8_t *)fb0;
+            s_fb[1] = (uint8_t *)fb1;
+            ESP_LOGI(TAG, "Framebuffers: fb0=%p fb1=%p (%u bytes each)",
+                     s_fb[0], s_fb[1], (unsigned)FB_SIZE);
         }
-        s_fb[0] = (uint8_t *)fb0;
-        s_fb[1] = (uint8_t *)fb1;
-        ESP_LOGI(TAG, "Framebuffers: fb0=%p fb1=%p (%u bytes each)",
-                 s_fb[0], s_fb[1], (unsigned)FB_SIZE);
     } else {
-        ESP_LOGW(TAG, "No DPI panel — framebuffer output disabled");
+        ESP_LOGW(TAG, "No DPI panel — HDMI output disabled");
     }
 
     /* Reset palette and screen state — default mode 0 = 640×480 */
