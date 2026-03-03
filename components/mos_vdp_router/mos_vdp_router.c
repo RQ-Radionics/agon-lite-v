@@ -22,6 +22,8 @@
 #include "mos_sysvars_block.h"
 
 #ifdef CONFIG_MOS_VDP_INTERNAL_ENABLED
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "mos_vdp_internal.h"
 
 /* A minimal sysvar block for the internal VDP path.
@@ -79,7 +81,11 @@ int mos_vdp_router_getch(void)
         if (use_internal()) {
             int c = mos_vdp_internal_getch();  /* returns -1 on 100ms timeout */
             if (c >= 0) return c;
-            /* Timeout — loop and re-evaluate: a TCP client may have connected */
+            /* -1: either 100ms timeout (queue exists but no key) or queue
+             * not yet initialised (init still in progress).  Either way,
+             * yield briefly and re-evaluate — a TCP client may have
+             * connected and taken priority, or the queue may now be ready. */
+            vTaskDelay(pdMS_TO_TICKS(10));
         } else {
             return mos_vdp_getch();
         }

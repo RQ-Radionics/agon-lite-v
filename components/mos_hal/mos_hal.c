@@ -63,11 +63,45 @@ void mos_hal_console_init(void)
     s_printf_mux = xSemaphoreCreateMutex();
 }
 
+/* --- Routing helpers --- */
+
+/*
+ * use_vdp(): true when I/O should go through the VDP router.
+ *
+ * When CONFIG_MOS_VDP_INTERNAL_ENABLED is set, the internal VDP is the
+ * primary console — always route through the router regardless of whether
+ * the HDMI panel initialised successfully.  The router handles the case
+ * where the internal VDP has no framebuffer (output is silently dropped
+ * on HDMI but the shell still runs; a TCP client can still connect).
+ *
+ * Without the internal VDP, only route through VDP when a TCP client is
+ * actually connected (or disconnecting, to deliver the -1 sentinel).
+ */
+static inline bool use_vdp(void)
+{
+#ifdef CONFIG_MOS_VDP_INTERNAL_ENABLED
+    return true;   /* always — internal VDP is the console */
+#else
+    return mos_vdp_router_connected() || mos_vdp_router_disconnecting();
+#endif
+}
+
+/* use_vdp_output(): same as use_vdp() but excludes the disconnecting state
+ * (we don't want to send output to a dead socket). */
+static inline bool use_vdp_output(void)
+{
+#ifdef CONFIG_MOS_VDP_INTERNAL_ENABLED
+    return true;
+#else
+    return mos_vdp_router_connected();
+#endif
+}
+
 /* --- Public API: routes to VDP or stdio console --- */
 
 void mos_putch(char c)
 {
-    if (mos_vdp_router_connected()) {
+    if (use_vdp_output()) {
         mos_vdp_router_putch((uint8_t)c);
     } else {
         putchar(c);
@@ -76,10 +110,7 @@ void mos_putch(char c)
 
 int mos_getch(void)
 {
-    if (mos_vdp_router_connected() || mos_vdp_router_disconnecting()) {
-        /* Route through VDP even while disconnecting so the shell gets -1
-         * promptly rather than falling through to the local console.
-         * mos_vdp_router_getch() returns -1 immediately when disconnecting. */
+    if (use_vdp()) {
         return mos_vdp_router_getch();
     }
     /* Both USB-JTAG and UART go through the IDF VFS — getchar() works for both. */
@@ -88,16 +119,10 @@ int mos_getch(void)
 
 bool mos_kbhit(void)
 {
-    if (mos_vdp_router_connected()) {
+    if (use_vdp_output()) {
         return mos_vdp_router_kbhit();
     }
 #if CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG
-    /* USB-JTAG: stdin is non-blocking when IDF manages the driver.
-     * Use select() timeout=0 would be ideal, but IDF USB-JTAG VFS does not
-     * support select.  Poll with a 0-tick read via the raw driver is gone;
-     * instead we simply report false (no key) — the shell loop will call
-     * mos_getch() which blocks until a key arrives.  This is acceptable
-     * for interactive use; autoexec.bat doesn't use kbhit. */
     return false;
 #else
     size_t available = 0;
@@ -109,7 +134,7 @@ bool mos_kbhit(void)
 void mos_puts(const char *s)
 {
     if (!s) return;
-    if (mos_vdp_router_connected()) {
+    if (use_vdp_output()) {
         while (*s) mos_vdp_router_putch((uint8_t)*s++);
     } else {
         fputs(s, stdout);
@@ -125,7 +150,7 @@ int mos_printf(const char *fmt, ...)
     va_end(args);
     if (n > 0) {
         int len = (n < MOS_PRINTF_BUF) ? n : MOS_PRINTF_BUF - 1;
-        if (mos_vdp_router_connected()) {
+        if (use_vdp_output()) {
             for (int i = 0; i < len; i++) mos_vdp_router_putch((uint8_t)s_printf_buf[i]);
         } else {
             fwrite(s_printf_buf, 1, len, stdout);

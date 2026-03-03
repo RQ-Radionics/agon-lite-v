@@ -855,7 +855,11 @@ void mos_vdp_internal_send_scancode(uint8_t byte)
 
 bool mos_vdp_internal_connected(void)
 {
-    return s_initialized;
+    /* The internal VDP is always "connected" when compiled in — it is a
+     * physical display, not a network client.  Output is silently dropped
+     * if the framebuffer is not yet initialised, but the shell must always
+     * route I/O here rather than falling back to the UART console. */
+    return true;
 }
 
 void mos_vdp_internal_flush(void)
