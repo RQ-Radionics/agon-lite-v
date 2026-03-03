@@ -40,6 +40,15 @@ menu "MOS Audio (ES8311 codec)"
             Olimex ESP32-P4-PC: GPIO6 (CODEC_PWR_DIS#, active LOW).
             Set to -1 if no power-enable GPIO is needed.
 
+    config MOS_AUDIO_PA_GPIO
+        int "Speaker power-amplifier enable GPIO (active HIGH, -1 to disable)"
+        default 53
+        range -1 56
+        help
+            GPIO to enable the speaker power amplifier. Drive HIGH to enable.
+            Olimex ESP32-P4-PC: GPIO53 (BSP_POWER_AMP_IO, active HIGH).
+            Set to -1 if no PA enable GPIO is needed.
+
     config MOS_AUDIO_I2S_NUM
         int "I2S port number"
         default 0

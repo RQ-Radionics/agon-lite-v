@@ -10,7 +10,8 @@
  *   I2S0: DOUT=GPIO9, WS=GPIO10, DIN=GPIO11, BCLK=GPIO12, MCLK=GPIO13
  *
  * Clock chain:
- *   I2S APLL → MCLK = 4,194,304 Hz (= 256 × 16384)
+ *   I2S DEFAULT (XTAL=40MHz on ESP32-P4 rev<3) → MCLK ≈ 4,194,304 Hz (= 256 × 16384)
+ *   APLL is occupied by MIPI DSI and cannot be used for I2S.
  *   ES8311: MCLK → internal PLL → ADC/DAC clocks
  *   BCLK = 32 × fs × 2-slots = 32 × 16384 × 2 = 1,048,576 Hz
  *   MCLK/BCLK = 4194304/1048576 = 4
@@ -329,14 +330,14 @@ static esp_err_t i2s_init(void)
      *   Bit width:    16-bit
      *   Slot mode:    MONO (IDF uses left slot only for mono)
      *   MCLK:         I2S_MCLK_MULTIPLE_256 = 256 × 16384 = 4194304 Hz
-     *   Clock source: I2S_CLK_SRC_APLL
-     *     APLL is required to generate exact 4194304 Hz — PLL integer
-     *     mode cannot produce this frequency. APLL gives exact ratios.
+     *   Clock source: I2S_CLK_SRC_DEFAULT (XTAL=40 MHz on ESP32-P4 rev<3)
+     *     APLL is occupied by MIPI DSI and cannot be used here.
+     *     The fractional divider gives <50 ppm error at 16384 Hz from 40 MHz.
      */
     i2s_std_config_t std_cfg = {
         .clk_cfg = {
             .sample_rate_hz = CONFIG_MOS_AUDIO_SAMPLE_RATE,
-            .clk_src        = I2S_CLK_SRC_APLL,
+            .clk_src        = I2S_CLK_SRC_DEFAULT,
             .mclk_multiple  = I2S_MCLK_MULTIPLE_256,
         },
         .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(
@@ -366,7 +367,7 @@ static esp_err_t i2s_init(void)
     ESP_RETURN_ON_ERROR(
         i2s_channel_enable(s_audio.i2s_rx), TAG, "i2s_enable RX");
 
-    ESP_LOGI(TAG, "I2S0 started: %d Hz mono 16-bit, MCLK=APLL×256",
+    ESP_LOGI(TAG, "I2S0 started: %d Hz mono 16-bit, MCLK=DEFAULT×256",
              CONFIG_MOS_AUDIO_SAMPLE_RATE);
     return ESP_OK;
 }
@@ -407,6 +408,22 @@ static esp_err_t audio_init_common(void)
             return ret;
         }
     }
+
+    /* --- 5. Enable speaker power amplifier (GPIO53 active HIGH) --- */
+#if CONFIG_MOS_AUDIO_PA_GPIO >= 0
+    {
+        gpio_config_t pa_cfg = {
+            .pin_bit_mask = (1ULL << CONFIG_MOS_AUDIO_PA_GPIO),
+            .mode         = GPIO_MODE_OUTPUT,
+            .pull_up_en   = GPIO_PULLUP_DISABLE,
+            .pull_down_en = GPIO_PULLDOWN_DISABLE,
+            .intr_type    = GPIO_INTR_DISABLE,
+        };
+        ESP_RETURN_ON_ERROR(gpio_config(&pa_cfg), TAG, "pa gpio config");
+        gpio_set_level(CONFIG_MOS_AUDIO_PA_GPIO, 1);  /* active HIGH = PA on */
+        ESP_LOGI(TAG, "Speaker PA enabled (GPIO%d=HIGH)", CONFIG_MOS_AUDIO_PA_GPIO);
+    }
+#endif
 
     s_audio.initialized = true;
     ESP_LOGI(TAG, "mos_audio initialized successfully");
