@@ -98,17 +98,9 @@ static esp_err_t audio_init_common(i2c_master_bus_handle_t bus)
     ESP_RETURN_ON_ERROR(
         i2s_channel_init_std_mode(s_audio.i2s_rx, &std_cfg),
         TAG, "i2s_init RX");
-    ESP_RETURN_ON_ERROR(
-        i2s_channel_enable(s_audio.i2s_tx), TAG, "i2s_enable TX");
-    ESP_RETURN_ON_ERROR(
-        i2s_channel_enable(s_audio.i2s_rx), TAG, "i2s_enable RX");
-
-    /* Wait for MCLK to stabilise before touching ES8311 over I2C.
-     * The ES8311 requires MCLK to be running before it will ACK any
-     * I2C transaction.  The I2S peripheral starts outputting MCLK as
-     * soon as the channel is enabled; allow a few ms for the ES8311
-     * internal oscillator to lock onto it. */
-    vTaskDelay(pdMS_TO_TICKS(20));
+    /* NOTE: do NOT call i2s_channel_enable here.
+     * esp_codec_dev calls i2s_channel_enable internally when esp_codec_dev_open()
+     * is called. Enabling channels here would cause a double-enable error. */
 
     /* --- esp_codec_dev data interface -------------------------------- */
     audio_codec_i2s_cfg_t i2s_cfg = {
@@ -124,13 +116,18 @@ static esp_err_t audio_init_common(i2c_master_bus_handle_t bus)
     const audio_codec_gpio_if_t *gpio_if = audio_codec_new_gpio();
     ESP_RETURN_ON_FALSE(gpio_if, ESP_ERR_NO_MEM, TAG, "audio_codec_new_gpio");
 
+    /* ES8311_CODEC_DEFAULT_ADDR = 0x30 (8-bit format: 7-bit 0x18 << 1).
+     * audio_codec_ctrl_i2c.c shifts right by 1 before calling
+     * i2c_master_bus_add_device, so the 7-bit address on the wire = 0x18. */
     audio_codec_i2c_cfg_t i2c_cfg = {
         .port       = CONFIG_MOS_AUDIO_I2C_PORT,
-        .addr       = ES8311_CODEC_DEFAULT_ADDR,  /* 0x18 */
+        .addr       = ES8311_CODEC_DEFAULT_ADDR,  /* 0x30 = 7-bit 0x18 << 1 */
         .bus_handle = bus,
     };
+    ESP_LOGI(TAG, "Adding ES8311 to I2C bus (addr=0x%02X -> 7-bit=0x%02X, bus=%p)",
+             ES8311_CODEC_DEFAULT_ADDR, ES8311_CODEC_DEFAULT_ADDR >> 1, (void *)bus);
     const audio_codec_ctrl_if_t *i2c_ctrl_if = audio_codec_new_i2c_ctrl(&i2c_cfg);
-    ESP_RETURN_ON_FALSE(i2c_ctrl_if, ESP_ERR_NO_MEM, TAG, "audio_codec_new_i2c_ctrl");
+    ESP_RETURN_ON_FALSE(i2c_ctrl_if, ESP_ERR_INVALID_STATE, TAG, "audio_codec_new_i2c_ctrl failed — i2c_master_bus_add_device error");
 
     /* --- ES8311 codec interface --------------------------------------- */
     esp_codec_dev_hw_gain_t gain = {
@@ -280,12 +277,12 @@ void mos_audio_deinit(void)
 {
     if (!s_audio.initialized) return;
 
+    /* esp_codec_dev_close disables the I2S channels internally */
     esp_codec_dev_close(s_audio.spk);
     esp_codec_dev_delete(s_audio.spk);
     s_audio.spk = NULL;
 
-    i2s_channel_disable(s_audio.i2s_tx);
-    i2s_channel_disable(s_audio.i2s_rx);
+    /* Delete channels after codec is closed */
     i2s_del_channel(s_audio.i2s_tx);
     i2s_del_channel(s_audio.i2s_rx);
 
