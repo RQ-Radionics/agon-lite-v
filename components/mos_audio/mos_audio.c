@@ -235,12 +235,21 @@ static esp_err_t es_read(uint8_t reg, uint8_t *val)
 /* ------------------------------------------------------------------ */
 static esp_err_t es8311_init(void)
 {
-    /* Pre-check: verify ES8311 is reachable before writing */
+    /* Pre-check: verify ES8311 is reachable before writing.
+     * Retry up to 5 times with 20ms gaps — MCLK may take a few extra ms
+     * to stabilise depending on APLL lock time. */
     {
         uint8_t probe = 0;
-        esp_err_t rc = es_read(ES8311_REG_CLK1, &probe);
+        esp_err_t rc = ESP_FAIL;
+        for (int attempt = 0; attempt < 5; attempt++) {
+            rc = es_read(ES8311_REG_CLK1, &probe);
+            if (rc == ESP_OK) break;
+            ESP_LOGW(TAG, "ES8311 probe attempt %d failed (0x%x), retrying...",
+                     attempt + 1, rc);
+            vTaskDelay(pdMS_TO_TICKS(20));
+        }
         if (rc != ESP_OK) {
-            ESP_LOGE(TAG, "ES8311 not responding before reset (err=0x%x %s)",
+            ESP_LOGE(TAG, "ES8311 not responding after retries (err=0x%x %s)",
                      rc, esp_err_to_name(rc));
             return rc;
         }
@@ -378,6 +387,12 @@ static esp_err_t audio_init_common(void)
             return ret;
         }
     }
+
+    /* Wait for MCLK to stabilize before accessing ES8311 via I2C.
+     * The ES8311 requires a stable MCLK before it will ACK I2C transactions.
+     * In practice 20ms was not enough (log showed failure at 21ms); use 100ms
+     * to give the codec's internal PLLs time to lock onto MCLK. */
+    vTaskDelay(pdMS_TO_TICKS(100));
 
     /* --- 4. Initialize ES8311 via I2C --- */
     {
