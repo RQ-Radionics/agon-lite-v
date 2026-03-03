@@ -12,7 +12,6 @@
 #include <string.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "driver/gpio.h"
 #include "driver/i2c_master.h"
 #include "driver/i2s_std.h"
 #include "esp_log.h"
@@ -150,21 +149,7 @@ esp_err_t mos_audio_init(void)
     ESP_RETURN_ON_FALSE(!s_initialized, ESP_ERR_INVALID_STATE,
                         TAG, "already initialized");
 
-#if CONFIG_MOS_AUDIO_PWR_GPIO >= 0
-    /* CODEC_PWR_DIS# (GPIO6, active LOW) — not in BSP but needed on Olimex */
-    gpio_config_t pwr = {
-        .pin_bit_mask = (1ULL << CONFIG_MOS_AUDIO_PWR_GPIO),
-        .mode         = GPIO_MODE_OUTPUT,
-        .pull_up_en   = GPIO_PULLUP_DISABLE,
-        .pull_down_en = GPIO_PULLDOWN_DISABLE,
-        .intr_type    = GPIO_INTR_DISABLE,
-    };
-    gpio_config(&pwr);
-    gpio_set_level(CONFIG_MOS_AUDIO_PWR_GPIO, 0);
-    ESP_LOGI(TAG, "Codec power ON (GPIO%d=LOW)", CONFIG_MOS_AUDIO_PWR_GPIO);
-#endif
-
-    /* bsp_i2c_init() — exact copy, no glitch_ignore_cnt, no internal pullup */
+    /* bsp_i2c_init() — exact copy, no extras */
     i2c_master_bus_config_t i2c_bus_conf = {
         .clk_source = I2C_CLK_SRC_DEFAULT,
         .sda_io_num = CONFIG_MOS_AUDIO_I2C_SDA_GPIO,
@@ -195,19 +180,6 @@ esp_err_t mos_audio_init_with_bus(i2c_master_bus_handle_t bus)
                         TAG, "already initialized");
     ESP_RETURN_ON_FALSE(bus != NULL, ESP_ERR_INVALID_ARG,
                         TAG, "bus handle is NULL");
-
-#if CONFIG_MOS_AUDIO_PWR_GPIO >= 0
-    gpio_config_t pwr = {
-        .pin_bit_mask = (1ULL << CONFIG_MOS_AUDIO_PWR_GPIO),
-        .mode         = GPIO_MODE_OUTPUT,
-        .pull_up_en   = GPIO_PULLUP_DISABLE,
-        .pull_down_en = GPIO_PULLDOWN_DISABLE,
-        .intr_type    = GPIO_INTR_DISABLE,
-    };
-    gpio_config(&pwr);
-    gpio_set_level(CONFIG_MOS_AUDIO_PWR_GPIO, 0);
-    ESP_LOGI(TAG, "Codec power ON (GPIO%d=LOW)", CONFIG_MOS_AUDIO_PWR_GPIO);
-#endif
 
     s_i2c_bus   = bus;
     s_bus_owned = false;
@@ -259,10 +231,6 @@ void mos_audio_deinit(void)
     }
     s_i2c_bus   = NULL;
     s_bus_owned = false;
-
-#if CONFIG_MOS_AUDIO_PWR_GPIO >= 0
-    gpio_set_level(CONFIG_MOS_AUDIO_PWR_GPIO, 1);
-#endif
 
     s_initialized = false;
     ESP_LOGI(TAG, "mos_audio de-initialized");
