@@ -507,20 +507,34 @@ static void mos_main_task(void *arg)
      * With the internal VDP enabled, the router is immediately connected
      * after mos_vdp_internal_init() — no TCP client is required to start.
      * With TCP-only mode, we wait for a client as before. */
+    bool first_session = true;
+
     while (1) {
 #ifdef CONFIG_MOS_VDP_INTERNAL_ENABLED
-        /* Internal VDP is always ready; TCP client may also connect later. */
-        ESP_LOGI(TAG, "Session loop: tcp=%d internal=%d router=%d",
-                 (int)mos_vdp_connected(),
-                 (int)mos_vdp_internal_connected(),
-                 (int)mos_vdp_router_connected());
-        if (!mos_vdp_router_connected()) {
-            ESP_LOGI(TAG, "Waiting for VDP...");
-            while (!mos_vdp_router_connected()) {
-                vTaskDelay(pdMS_TO_TICKS(100));
+        /* With internal VDP: shell runs immediately, always.
+         * On first boot: show banner + run autoexec.
+         * After a TCP client disconnects: skip banner/autoexec — just
+         * resume the shell prompt on the internal display. */
+        if (first_session) {
+            ESP_LOGI(TAG, "Starting shell session (tcp=%d internal=%d)",
+                     (int)mos_vdp_connected(),
+                     (int)mos_vdp_internal_connected());
+            print_banner();
+            char autoexec[64];
+            snprintf(autoexec, sizeof(autoexec), "%s/autoexec.bat", MOS_FLASH_MOUNT);
+            FILE *f = fopen(autoexec, "r");
+            if (f) {
+                fclose(f);
+                ESP_LOGI(TAG, "Running %s", autoexec);
+                mos_shell_exec("EXEC " MOS_FLASH_MOUNT "/autoexec.bat");
             }
+            first_session = false;
+        } else {
+            /* Returning from TCP session — clear screen, show prompt */
+            ESP_LOGI(TAG, "TCP session ended — resuming internal VDP shell");
+            mos_shell_reset();
+            print_banner();
         }
-        ESP_LOGI(TAG, "VDP ready (internal) - starting shell session");
 #else
         ESP_LOGI(TAG, "Waiting for VDP client on port %d...", MOS_VDP_TCP_PORT);
         while (!mos_vdp_router_connected()) {
@@ -529,27 +543,31 @@ static void mos_main_task(void *arg)
         /* Give the VDP a moment to finish handshake before sending VDU codes */
         vTaskDelay(pdMS_TO_TICKS(200));
         ESP_LOGI(TAG, "VDP client connected - starting shell session");
-#endif
 
         /* Welcome banner (includes CLS + colour reset) */
         print_banner();
 
         /* Run autoexec if present */
-        char autoexec[64];
-        snprintf(autoexec, sizeof(autoexec), "%s/autoexec.bat", MOS_FLASH_MOUNT);
-        FILE *f = fopen(autoexec, "r");
-        if (f) {
-            fclose(f);
-            ESP_LOGI(TAG, "Running %s", autoexec);
-            mos_shell_exec("EXEC " MOS_FLASH_MOUNT "/autoexec.bat");
+        {
+            char autoexec[64];
+            snprintf(autoexec, sizeof(autoexec), "%s/autoexec.bat", MOS_FLASH_MOUNT);
+            FILE *f = fopen(autoexec, "r");
+            if (f) {
+                fclose(f);
+                ESP_LOGI(TAG, "Running %s", autoexec);
+                mos_shell_exec("EXEC " MOS_FLASH_MOUNT "/autoexec.bat");
+            }
         }
+#endif
 
-        /* Interactive shell - returns when VDP disconnects */
+        /* Interactive shell - returns when TCP VDP disconnects.
+         * With internal VDP, mos_shell_run() never returns (getch blocks
+         * indefinitely until a TCP client connects and later disconnects). */
         mos_shell_run();
 
-        /* Session ended — reset shell state for next connection */
+        /* Session ended (TCP disconnect) — reset shell state */
         mos_shell_reset();
-        ESP_LOGI(TAG, "Session reset — waiting for next VDP connection");
+        ESP_LOGI(TAG, "Session ended — resetting");
     }
 }
 

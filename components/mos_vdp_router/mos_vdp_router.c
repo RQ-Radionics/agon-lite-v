@@ -79,14 +79,19 @@ int mos_vdp_router_getch(void)
 {
     while (1) {
         if (use_internal()) {
-            int c = mos_vdp_internal_getch();  /* returns -1 on 100ms timeout */
+            /* mos_vdp_internal_getch() has a 100ms internal timeout and
+             * returns -1 on timeout OR when the queue is not yet ready.
+             * We NEVER propagate -1 to the caller in internal-VDP mode —
+             * the shell must not exit because of a keyboard timeout.
+             * Only a TCP disconnect should end a session, handled below. */
+            int c = mos_vdp_internal_getch();
             if (c >= 0) return c;
-            /* -1: either 100ms timeout (queue exists but no key) or queue
-             * not yet initialised (init still in progress).  Either way,
-             * yield briefly and re-evaluate — a TCP client may have
-             * connected and taken priority, or the queue may now be ready. */
-            vTaskDelay(pdMS_TO_TICKS(10));
+            /* -1: no key yet — loop and re-check.  If a TCP client just
+             * connected, use_internal() will return false next iteration
+             * and we switch to mos_vdp_getch(). */
         } else {
+            /* TCP VDP: propagate -1 on disconnect so the shell exits and
+             * the session loop resets cleanly for the next connection. */
             return mos_vdp_getch();
         }
     }
