@@ -310,8 +310,25 @@ static QueueHandle_t s_key_queue = NULL;   /* ASCII chars available for getch() 
 static void vdp_render_task(void *arg)
 {
     uint8_t byte;
+    bool first = true;
     while (1) {
         if (xQueueReceive(s_vdu_queue, &byte, portMAX_DELAY) == pdTRUE) {
+            /* Diagnostic: on first byte received, paint fb[0] blue so we
+             * know (a) bytes are reaching the task and (b) whether
+             * draw_bitmap works from the render task context.
+             * Remove once text rendering is confirmed. */
+            if (first && s_fb[0] && s_panel) {
+                first = false;
+                ESP_LOGI("vdp_int", "DIAG: first byte 0x%02X received — painting blue", byte);
+                uint8_t *p = s_fb[0];
+                for (int i = 0; i < FB_W * FB_H; i++) {
+                    *p++ = 0x00;  /* R */
+                    *p++ = 0x00;  /* G */
+                    *p++ = 0xFF;  /* B */
+                }
+                esp_lcd_panel_draw_bitmap(s_panel, 0, 0, FB_W, FB_H, s_fb[0]);
+                ESP_LOGI("vdp_int", "DIAG: draw_bitmap blue done");
+            }
             if (s_fb_mutex) xSemaphoreTake(s_fb_mutex, portMAX_DELAY);
             vdu_process(byte);
             if (s_fb_mutex) xSemaphoreGive(s_fb_mutex);
@@ -825,9 +842,21 @@ esp_err_t mos_vdp_internal_init(esp_lcd_panel_handle_t dpi_panel)
 
 void mos_vdp_internal_putch(uint8_t c)
 {
-    if (!s_vdu_queue) return;
+    if (!s_vdu_queue) {
+        ESP_LOGE(TAG, "putch(0x%02X) — queue NULL!", c);
+        return;
+    }
+    static int s_put_count = 0;
+    if (s_put_count < 5) {
+        ESP_LOGI(TAG, "putch[%d] 0x%02X queue_spaces=%d",
+                 s_put_count, c, (int)uxQueueSpacesAvailable(s_vdu_queue));
+        s_put_count++;
+    }
     /* Non-blocking: if queue is full, drop the byte (overflow) */
-    xQueueSend(s_vdu_queue, &c, 0);
+    BaseType_t sent = xQueueSend(s_vdu_queue, &c, 0);
+    if (sent != pdTRUE && s_put_count <= 10) {
+        ESP_LOGW(TAG, "putch OVERFLOW — queue full, byte 0x%02X dropped", c);
+    }
 }
 
 int mos_vdp_internal_getch(void)
