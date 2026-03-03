@@ -103,6 +103,13 @@ static esp_err_t audio_init_common(i2c_master_bus_handle_t bus)
     ESP_RETURN_ON_ERROR(
         i2s_channel_enable(s_audio.i2s_rx), TAG, "i2s_enable RX");
 
+    /* Wait for MCLK to stabilise before touching ES8311 over I2C.
+     * The ES8311 requires MCLK to be running before it will ACK any
+     * I2C transaction.  The I2S peripheral starts outputting MCLK as
+     * soon as the channel is enabled; allow a few ms for the ES8311
+     * internal oscillator to lock onto it. */
+    vTaskDelay(pdMS_TO_TICKS(20));
+
     /* --- esp_codec_dev data interface -------------------------------- */
     audio_codec_i2s_cfg_t i2s_cfg = {
         .port      = CONFIG_MOS_AUDIO_I2S_NUM,
