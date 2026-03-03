@@ -180,6 +180,52 @@ static esp_err_t audio_init_common(i2c_master_bus_handle_t bus)
 }
 
 /* ------------------------------------------------------------------ */
+/* I2C bus recovery — 9 SCL pulses to unstick any slave holding SDA   */
+/* low from a previous incomplete transaction (e.g. after warm reset). */
+/* ------------------------------------------------------------------ */
+static void i2c_bus_recover(int scl_gpio, int sda_gpio)
+{
+    gpio_config_t cfg = {
+        .pin_bit_mask     = (1ULL << scl_gpio) | (1ULL << sda_gpio),
+        .mode             = GPIO_MODE_INPUT_OUTPUT_OD,
+        .pull_up_en       = GPIO_PULLUP_ENABLE,
+        .pull_down_en     = GPIO_PULLDOWN_DISABLE,
+        .intr_type        = GPIO_INTR_DISABLE,
+    };
+    gpio_config(&cfg);
+    gpio_set_level(scl_gpio, 1);
+    gpio_set_level(sda_gpio, 1);
+    esp_rom_delay_us(10);
+
+    if (gpio_get_level(sda_gpio)) {
+        ESP_LOGD(TAG, "I2C bus already free");
+        return;
+    }
+
+    ESP_LOGW(TAG, "I2C SDA stuck LOW — sending 9 recovery clocks on SCL=%d SDA=%d",
+             scl_gpio, sda_gpio);
+    for (int i = 0; i < 9; i++) {
+        gpio_set_level(scl_gpio, 0);
+        esp_rom_delay_us(10);
+        gpio_set_level(scl_gpio, 1);
+        esp_rom_delay_us(10);
+        if (gpio_get_level(sda_gpio)) {
+            ESP_LOGI(TAG, "I2C bus freed after %d clocks", i + 1);
+            break;
+        }
+    }
+    /* STOP: SDA low→high while SCL high */
+    gpio_set_level(sda_gpio, 0);
+    esp_rom_delay_us(10);
+    gpio_set_level(scl_gpio, 1);
+    esp_rom_delay_us(10);
+    gpio_set_level(sda_gpio, 1);
+    esp_rom_delay_us(10);
+
+    ESP_LOGI(TAG, "I2C recovery done: SDA=%d", gpio_get_level(sda_gpio));
+}
+
+/* ------------------------------------------------------------------ */
 /* Power-on helper (GPIO6 CODEC_PWR_DIS#, active LOW)                  */
 /* ------------------------------------------------------------------ */
 static esp_err_t codec_power_on(void)
@@ -211,6 +257,10 @@ esp_err_t mos_audio_init(void)
 
     ESP_RETURN_ON_ERROR(codec_power_on(), TAG, "codec_power_on");
 
+    /* Bus recovery: generate 9 SCL pulses to release any slave that may be
+     * holding SDA low from a previous incomplete transaction (warm reset). */
+    i2c_bus_recover(CONFIG_MOS_AUDIO_I2C_SCL_GPIO, CONFIG_MOS_AUDIO_I2C_SDA_GPIO);
+
     /* Create I2C bus */
     i2c_master_bus_handle_t bus = NULL;
     i2c_master_bus_config_t bus_cfg = {
@@ -228,6 +278,11 @@ esp_err_t mos_audio_init(void)
 
     esp_err_t ret = audio_init_common(bus);
     if (ret != ESP_OK) {
+        /* esp_codec_dev may have registered a device on the bus even on
+         * failure; we cannot delete the bus until all devices are removed.
+         * Call i2c_master_bus_reset() to force-clear any stuck state, then
+         * delete.  Errors here are non-fatal — log and move on. */
+        i2c_master_bus_reset(bus);
         i2c_del_master_bus(bus);
         s_audio.bus_owned = false;
     }
