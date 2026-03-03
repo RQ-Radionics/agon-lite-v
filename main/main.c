@@ -402,14 +402,28 @@ static void mos_main_task(void *arg)
     }
 
     /* 4. Network — bring up IP connectivity (WiFi, Ethernet, or none).
-     * Backend is selected at compile time via CONFIG_MOS_NET_BACKEND.
-     *   WiFi:     retry indefinitely (VDP over TCP needs network).
-     *   Ethernet: single attempt with timeout; continue without network
-     *             if no cable is plugged in — shell still works locally.
-     *   None:     skip entirely. */
+     *
+     * When the internal VDP is enabled (CONFIG_MOS_VDP_INTERNAL_ENABLED),
+     * network is OPTIONAL: the shell starts on the HDMI display regardless.
+     * Network failure is logged and skipped; the TCP VDP server is still
+     * started so agon-sdl can connect later if a cable is plugged in.
+     *
+     * When TCP-only mode is used, network is REQUIRED: we loop until up.
+     */
     int net_ok = -1;
 #if defined(CONFIG_MOS_NET_WIFI)
     {
+#ifdef CONFIG_MOS_VDP_INTERNAL_ENABLED
+        /* With internal VDP: single attempt, non-blocking on failure */
+        mos_printf("Connecting to WiFi...\r\n");
+        net_ok = mos_net_init(15000);
+        if (net_ok == 0) {
+            mos_printf("WiFi OK  IP: %s\r\n", mos_net_ip());
+        } else {
+            mos_printf("WiFi FAIL - continuing without network\r\n");
+        }
+#else
+        /* TCP-only: retry indefinitely */
         uint32_t delay_ms = 15000;
         while (net_ok != 0) {
             mos_printf("Connecting to WiFi...\r\n");
@@ -422,10 +436,20 @@ static void mos_main_task(void *arg)
                 vTaskDelay(pdMS_TO_TICKS(5000));
             }
         }
+#endif
     }
 #elif defined(CONFIG_MOS_NET_ETHERNET)
-    /* Ethernet: retry until link is up — VDP requires network.
-     * If the cable is not plugged in yet, keep trying every 10 s. */
+#ifdef CONFIG_MOS_VDP_INTERNAL_ENABLED
+    /* With internal VDP: single attempt, non-blocking on failure */
+    mos_printf("Starting Ethernet (IP101, RMII)...\r\n");
+    net_ok = mos_net_init(CONFIG_MOS_ETH_LINK_TIMEOUT_MS);
+    if (net_ok == 0) {
+        mos_printf("Ethernet OK  IP: %s\r\n", mos_net_ip());
+    } else {
+        mos_printf("Ethernet: no link — continuing without network\r\n");
+    }
+#else
+    /* TCP-only: retry until link is up */
     while (net_ok != 0) {
         mos_printf("Starting Ethernet (IP101, RMII)...\r\n");
         net_ok = mos_net_init(CONFIG_MOS_ETH_LINK_TIMEOUT_MS);
@@ -436,6 +460,7 @@ static void mos_main_task(void *arg)
             vTaskDelay(pdMS_TO_TICKS(10000));
         }
     }
+#endif
 #else
     mos_printf("Network disabled\r\n");
 #endif
@@ -451,12 +476,25 @@ static void mos_main_task(void *arg)
     }
 #endif
 
-    /* 6. VDP TCP server — net_ok==0 guaranteed here (loops above never exit otherwise) */
+    /* 6. VDP TCP server.
+     * socket()+bind(INADDR_ANY)+listen() work even without an IP address,
+     * so mos_vdp_init() is always called.  With no network, accept() will
+     * never return a client and mos_vdp_connected() stays false — correct.
+     * Without internal VDP, the loop below retries on failure (shouldn't
+     * happen, but belt-and-suspenders). */
+#ifdef CONFIG_MOS_VDP_INTERNAL_ENABLED
+    if (mos_vdp_init() == 0) {
+        if (net_ok == 0) {
+            mos_printf("VDP server on port %d\r\n", MOS_VDP_TCP_PORT);
+        }
+    }
+#else
     while (mos_vdp_init() != 0) {
         mos_printf("VDP server failed - retrying in 5s\r\n");
         vTaskDelay(pdMS_TO_TICKS(5000));
     }
     mos_printf("VDP server on port %d - connect to start shell\r\n", MOS_VDP_TCP_PORT);
+#endif
 
     /* 7. MOS API jump table */
     mos_api_table_init();
