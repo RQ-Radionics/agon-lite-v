@@ -109,27 +109,36 @@ static void palette_reset(void)
 
 /* ------------------------------------------------------------------ */
 /* Framebuffer state                                                    */
+/*                                                                      */
+/* Single-buffer strategy: always render into fbs[0] and call          */
+/* esp_lcd_panel_draw_bitmap(fbs[0]) to flush dcache → PSRAM so the    */
+/* DPI DMA sees updated pixels.  IDF detects color_data is within      */
+/* fbs[0] and does only a cache writeback (no DMA copy, no buf swap).  */
+/*                                                                      */
+/* Double-buffering is not used: tearing is not visible at character   */
+/* granularity, and it avoids the diverging-buffers problem that        */
+/* occurs when rendering incrementally into alternating buffers.        */
 /* ------------------------------------------------------------------ */
 static esp_lcd_panel_handle_t s_panel = NULL;
-static uint8_t *s_fb[2] = { NULL, NULL };   /* double buffer pointers (PSRAM) */
-static int      s_back  = 0;                /* index of back buffer (we write here) */
+static uint8_t *s_fb[2] = { NULL, NULL };   /* fb[0] = render target; fb[1] unused */
 
-static SemaphoreHandle_t s_fb_mutex = NULL; /* protects back-buffer access */
+static SemaphoreHandle_t s_fb_mutex = NULL; /* protects framebuffer access */
 
 static inline void fb_plot_pixel(int x, int y, rgb888_t c)
 {
     if ((unsigned)x >= (unsigned)s_mode_w || (unsigned)y >= (unsigned)s_mode_h) return;
     /* Stride is always FB_W (physical framebuffer width = 800) */
-    uint8_t *p = s_fb[s_back] + (y * FB_W + x) * BYTES_PER_PIX;
+    uint8_t *p = s_fb[0] + (y * FB_W + x) * BYTES_PER_PIX;
     p[0] = c.r; p[1] = c.g; p[2] = c.b;
 }
 
-static void fb_flip(void)
+static void fb_flush(void)
 {
-    if (!s_panel) return;
-    /* Always push the full physical framebuffer — DPI outputs FB_W×FB_H */
-    esp_lcd_panel_draw_bitmap(s_panel, 0, 0, FB_W, FB_H, s_fb[s_back]);
-    s_back ^= 1;
+    /* Flush dcache → PSRAM so the DPI DMA sees updated pixels.
+     * Pass fbs[0]: IDF detects it's within the panel fb range and does
+     * cache writeback + sets cur_fb_index=0. No DMA copy. */
+    if (!s_panel || !s_fb[0]) return;
+    esp_lcd_panel_draw_bitmap(s_panel, 0, 0, FB_W, FB_H, s_fb[0]);
 }
 
 /* ------------------------------------------------------------------ */
@@ -169,7 +178,7 @@ static void clear_screen(void)
     /* Fill the full physical framebuffer (FB_W × FB_H) with bg colour.
      * Pixels outside the active mode area are black by convention but
      * clearing the full buffer avoids stale pixels at mode boundaries. */
-    uint8_t *p = s_fb[s_back];
+    uint8_t *p = s_fb[0];
     for (int i = 0; i < FB_W * FB_H; i++) {
         p[0] = bg.r; p[1] = bg.g; p[2] = bg.b;
         p += BYTES_PER_PIX;
@@ -193,13 +202,13 @@ static void scroll_up(void)
      * (stride = FB_W so rows are contiguous in memory even if mode_w < FB_W,
      * but the extra pixels at the right are also moved — acceptable) */
     if (s_vp_left == 0 && s_vp_right == COLS - 1) {
-        uint8_t *dst = s_fb[s_back] + vp_y0 * row_bytes;
+        uint8_t *dst = s_fb[0] + vp_y0 * row_bytes;
         uint8_t *src = dst + char_bytes;
         int move_bytes = (vp_y1 - vp_y0 - FONT_H) * row_bytes;
         if (move_bytes > 0) memmove(dst, src, move_bytes);
         /* Clear bottom character line (full physical width) */
         rgb888_t bg = s_palette[s_bg & 0xF];
-        uint8_t *bot = s_fb[s_back] + (vp_y1 - FONT_H) * row_bytes;
+        uint8_t *bot = s_fb[0] + (vp_y1 - FONT_H) * row_bytes;
         for (int i = 0; i < FONT_H * FB_W; i++) {
             bot[0] = bg.r; bot[1] = bg.g; bot[2] = bg.b;
             bot += BYTES_PER_PIX;
@@ -207,13 +216,13 @@ static void scroll_up(void)
     } else {
         /* Partial-width viewport: copy row by row using physical stride */
         for (int y = vp_y0; y < vp_y1 - FONT_H; y++) {
-            uint8_t *dst = s_fb[s_back] + (y * FB_W + vp_x0) * BYTES_PER_PIX;
+            uint8_t *dst = s_fb[0] + (y * FB_W + vp_x0) * BYTES_PER_PIX;
             uint8_t *src = dst + char_bytes;
             memmove(dst, src, vp_w * BYTES_PER_PIX);
         }
         rgb888_t bg = s_palette[s_bg & 0xF];
         for (int y = vp_y1 - FONT_H; y < vp_y1; y++) {
-            uint8_t *p = s_fb[s_back] + (y * FB_W + vp_x0) * BYTES_PER_PIX;
+            uint8_t *p = s_fb[0] + (y * FB_W + vp_x0) * BYTES_PER_PIX;
             for (int x = 0; x < vp_w; x++) {
                 p[0] = bg.r; p[1] = bg.g; p[2] = bg.b;
                 p += BYTES_PER_PIX;
@@ -323,7 +332,7 @@ static void vdu_process(uint8_t c)
             /* Printable: draw at cursor, advance */
             draw_char(s_col, s_row, c);
             cursor_advance();
-            fb_flip();
+            fb_flush();
             return;
         }
         switch (c) {
@@ -344,25 +353,22 @@ static void vdu_process(uint8_t c)
             break;
         case 0x0A: /* VDU 10 — LF */
             newline();
-            fb_flip();
-            break;
-        case 0x0B: /* VDU 11 — vertical tab (cursor up) */
-            if (s_row > s_vp_top) s_row--;
+            fb_flush();
             break;
         case 0x0C: /* VDU 12 — CLS */
             clear_screen();
-            s_col = s_vp_left;
-            s_row = s_vp_top;
-            fb_flip();
-            break;
+             s_col = s_vp_left;
+             s_row = s_vp_top;
+             fb_flush();
+             break;
         case 0x0D: /* VDU 13 — CR */
-            s_col = s_vp_left;
-            break;
+             s_col = s_vp_left;
+             break;
         case 0x0E: /* VDU 14 — page mode on (ignored) */  break;
         case 0x0F: /* VDU 15 — page mode off (ignored) */ break;
         case 0x10: /* VDU 16 — CLG (clear graphics, treat as CLS here) */
             clear_screen();
-            fb_flip();
+            fb_flush();
             break;
         case 0x11: /* VDU 17 — COLOUR n */
             s_vdu_state = VDU_STATE_VDU17;
@@ -493,7 +499,7 @@ static void vdu_process(uint8_t c)
         s_vp_right = COLS - 1; s_vp_bottom = ROWS - 1;
         clear_screen();
         s_col = 0; s_row = 0;
-        fb_flip();
+        fb_flush();
         s_vdu_state = VDU_STATE_NORMAL;
         break;
     }
@@ -533,7 +539,7 @@ static void vdu_process(uint8_t c)
             int py = s_mode_h - 1 - (int)y;
             if (px >= 0 && px < s_mode_w && py >= 0 && py < s_mode_h) {
                 fb_plot_pixel(px, py, s_palette[s_fg & 0xF]);
-                fb_flip();
+                fb_flush();
             }
         }
         s_vdu_state = VDU_STATE_NORMAL;
@@ -765,26 +771,21 @@ esp_err_t mos_vdp_internal_init(esp_lcd_panel_handle_t dpi_panel)
     s_vdu_state = VDU_STATE_NORMAL;
     memset(&s_kbd, 0, sizeof(s_kbd));
 
-    /* Clear both framebuffers to black.
-     * memset writes through dcache (DBUS alias, 0x3Cxxxxxx).
-     * The DPI DMA reads from physical PSRAM — flush dcache to PSRAM so
-     * the DMA sees zeros immediately, not stale PSRAM content. */
-    /* Flush both framebuffers to physical PSRAM so the DPI DMA sees zeros.
-     * C2M + UNALIGNED: write dirty dcache lines to PSRAM (no INVALIDATE —
-     * combining INVALIDATE with UNALIGNED is rejected by the IDF driver). */
-    if (s_fb[0]) {
-        memset(s_fb[0], 0, FB_SIZE);
-        esp_cache_msync(s_fb[0], FB_SIZE,
-            ESP_CACHE_MSYNC_FLAG_DIR_C2M |
-            ESP_CACHE_MSYNC_FLAG_TYPE_DATA |
-            ESP_CACHE_MSYNC_FLAG_UNALIGNED);
-    }
-    if (s_fb[1]) {
-        memset(s_fb[1], 0, FB_SIZE);
-        esp_cache_msync(s_fb[1], FB_SIZE,
-            ESP_CACHE_MSYNC_FLAG_DIR_C2M |
-            ESP_CACHE_MSYNC_FLAG_TYPE_DATA |
-            ESP_CACHE_MSYNC_FLAG_UNALIGNED);
+    /* Clear both framebuffers to black and flush dcache → PSRAM.
+     * fb[0] is the render target; fb[1] exists because the panel was created
+     * with num_fbs=2 (IDF requires it for DPI), but we never render into it.
+     * Both are zeroed so the DPI DMA never emits stale PSRAM content even
+     * if it temporarily points to fb[1] during init.
+     * C2M + UNALIGNED: flush dirty dcache lines to PSRAM.
+     * (INVALIDATE is not combined with UNALIGNED — IDF rejects that.) */
+    for (int i = 0; i < 2; i++) {
+        if (s_fb[i]) {
+            memset(s_fb[i], 0, FB_SIZE);
+            esp_cache_msync(s_fb[i], FB_SIZE,
+                ESP_CACHE_MSYNC_FLAG_DIR_C2M |
+                ESP_CACHE_MSYNC_FLAG_TYPE_DATA |
+                ESP_CACHE_MSYNC_FLAG_UNALIGNED);
+        }
     }
 
     /* Create queues */
