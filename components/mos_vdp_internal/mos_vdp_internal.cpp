@@ -58,6 +58,32 @@ static int s_mode_h = 480;   /* active mode pixel height */
 #define ROWS            (s_mode_h / FONT_H)
 
 /* ------------------------------------------------------------------ */
+/* Scale + centre state                                                 */
+/*                                                                      */
+/* s_scale: largest integer factor such that                            */
+/*   s_mode_w * s_scale <= FB_W  AND  s_mode_h * s_scale <= FB_H       */
+/* s_off_x/y: pixel offset in the physical framebuffer to centre the   */
+/*   scaled image (letterbox / pillarbox black borders).                */
+/*                                                                      */
+/* Updated by scale_update() whenever the mode changes.                 */
+/* All rendering goes through fb_plot_pixel() which applies the         */
+/* scale + offset transparently to the rest of the code.               */
+/* ------------------------------------------------------------------ */
+static int s_scale = 1;
+static int s_off_x = 0;
+static int s_off_y = 0;
+
+static void scale_update(void)
+{
+    int sx = FB_W / s_mode_w;
+    int sy = FB_H / s_mode_h;
+    s_scale = (sx < sy) ? sx : sy;
+    if (s_scale < 1) s_scale = 1;
+    s_off_x = (FB_W - s_mode_w * s_scale) / 2;
+    s_off_y = (FB_H - s_mode_h * s_scale) / 2;
+}
+
+/* ------------------------------------------------------------------ */
 /* Agon 16-colour palette (defaultPalette10 mapped through colourLookup)
  *
  * FabGL levels: 0x00, 0x55, 0xAA, 0xFF
@@ -127,9 +153,17 @@ static SemaphoreHandle_t s_fb_mutex = NULL; /* protects framebuffer access */
 static inline void fb_plot_pixel(int x, int y, rgb888_t c)
 {
     if ((unsigned)x >= (unsigned)s_mode_w || (unsigned)y >= (unsigned)s_mode_h) return;
-    /* Stride is always FB_W (physical framebuffer width = 800) */
-    uint8_t *p = s_fb[0] + (y * FB_W + x) * BYTES_PER_PIX;
-    p[0] = c.r; p[1] = c.g; p[2] = c.b;
+    /* Apply scale + centre offset: each logical pixel → s_scale×s_scale
+     * physical pixels starting at (s_off_x + x*s_scale, s_off_y + y*s_scale). */
+    int phys_x = s_off_x + x * s_scale;
+    int phys_y = s_off_y + y * s_scale;
+    for (int dy = 0; dy < s_scale; dy++) {
+        uint8_t *row = s_fb[0] + ((phys_y + dy) * FB_W + phys_x) * BYTES_PER_PIX;
+        for (int dx = 0; dx < s_scale; dx++) {
+            row[0] = c.r; row[1] = c.g; row[2] = c.b;
+            row += BYTES_PER_PIX;
+        }
+    }
 }
 
 static void fb_flush(void)
@@ -175,55 +209,76 @@ static void draw_char(int col, int row, uint8_t c)
 static void clear_screen(void)
 {
     rgb888_t bg = s_palette[s_bg & 0xF];
-    /* Fill the full physical framebuffer (FB_W × FB_H) with bg colour.
-     * Pixels outside the active mode area are black by convention but
-     * clearing the full buffer avoids stale pixels at mode boundaries. */
-    uint8_t *p = s_fb[0];
-    for (int i = 0; i < FB_W * FB_H; i++) {
-        p[0] = bg.r; p[1] = bg.g; p[2] = bg.b;
-        p += BYTES_PER_PIX;
+    /* First zero the entire physical framebuffer to black (border areas). */
+    memset(s_fb[0], 0, FB_SIZE);
+    /* Then fill only the scaled active area with the background colour.
+     * The scaled area spans [s_off_x .. s_off_x + s_mode_w*s_scale - 1]
+     *                     × [s_off_y .. s_off_y + s_mode_h*s_scale - 1]. */
+    int scaled_w = s_mode_w * s_scale;
+    int scaled_h = s_mode_h * s_scale;
+    for (int py = s_off_y; py < s_off_y + scaled_h; py++) {
+        uint8_t *row = s_fb[0] + (py * FB_W + s_off_x) * BYTES_PER_PIX;
+        for (int px = 0; px < scaled_w; px++) {
+            row[0] = bg.r; row[1] = bg.g; row[2] = bg.b;
+            row += BYTES_PER_PIX;
+        }
     }
 }
 
 static void scroll_up(void)
 {
     /* Scroll viewport region up one character line.
-     * Stride is always FB_W (physical framebuffer pitch = 800 pixels). */
-    int row_bytes  = FB_W * BYTES_PER_PIX;          /* physical row stride */
-    int char_bytes = FONT_H * row_bytes;
+     *
+     * All coordinates are in physical framebuffer space, accounting for
+     * scale (s_scale) and centre offset (s_off_x, s_off_y).
+     *
+     * One logical character row = FONT_H * s_scale physical rows.
+     * One logical character col = FONT_W * s_scale physical pixels.
+     */
+    int row_bytes   = FB_W * BYTES_PER_PIX;               /* physical row stride */
+    int char_h_phys = FONT_H * s_scale;                   /* scaled char height  */
+    int char_bytes  = char_h_phys * row_bytes;             /* bytes per char row  */
 
-    int vp_y0 = s_vp_top  * FONT_H;
-    int vp_y1 = (s_vp_bottom + 1) * FONT_H;  /* exclusive */
-    int vp_x0 = s_vp_left  * FONT_W;
-    int vp_x1 = (s_vp_right + 1) * FONT_W;
-    int vp_w  = vp_x1 - vp_x0;
+    /* Viewport in physical pixels (top-left inclusive, bottom-right exclusive) */
+    int vp_py0 = s_off_y + s_vp_top    * char_h_phys;
+    int vp_py1 = s_off_y + (s_vp_bottom + 1) * char_h_phys;
+    int vp_px0 = s_off_x + s_vp_left   * FONT_W * s_scale;
+    int vp_px1 = s_off_x + (s_vp_right + 1) * FONT_W * s_scale;
+    int vp_pw  = (vp_px1 - vp_px0) * BYTES_PER_PIX;      /* bytes per logical vp row */
 
-    /* If viewport spans the full mode width we can memmove entire rows
-     * (stride = FB_W so rows are contiguous in memory even if mode_w < FB_W,
-     * but the extra pixels at the right are also moved — acceptable) */
+    rgb888_t bg = s_palette[s_bg & 0xF];
+
     if (s_vp_left == 0 && s_vp_right == COLS - 1) {
-        uint8_t *dst = s_fb[0] + vp_y0 * row_bytes;
-        uint8_t *src = dst + char_bytes;
-        int move_bytes = (vp_y1 - vp_y0 - FONT_H) * row_bytes;
-        if (move_bytes > 0) memmove(dst, src, move_bytes);
-        /* Clear bottom character line (full physical width) */
-        rgb888_t bg = s_palette[s_bg & 0xF];
-        uint8_t *bot = s_fb[0] + (vp_y1 - FONT_H) * row_bytes;
-        for (int i = 0; i < FONT_H * FB_W; i++) {
-            bot[0] = bg.r; bot[1] = bg.g; bot[2] = bg.b;
-            bot += BYTES_PER_PIX;
+        /* Full-width viewport: memmove entire physical rows in one shot.
+         * We move only the scaled active area width, but since the viewport
+         * spans all columns the stride equals the full FB_W row — we can
+         * use a single memmove of (rows-1) complete physical rows. */
+        int move_bytes = (vp_py1 - vp_py0 - char_h_phys) * row_bytes;
+        if (move_bytes > 0) {
+            uint8_t *dst = s_fb[0] + vp_py0 * row_bytes;
+            uint8_t *src = dst + char_bytes;
+            memmove(dst, src, move_bytes);
+        }
+        /* Clear the last character row of the viewport */
+        uint8_t *bot = s_fb[0] + (vp_py1 - char_h_phys) * row_bytes
+                                + vp_px0 * BYTES_PER_PIX;
+        for (int pr = 0; pr < char_h_phys; pr++) {
+            uint8_t *p = bot + pr * row_bytes;
+            for (int pp = 0; pp < (vp_px1 - vp_px0); pp++) {
+                p[0] = bg.r; p[1] = bg.g; p[2] = bg.b;
+                p += BYTES_PER_PIX;
+            }
         }
     } else {
-        /* Partial-width viewport: copy row by row using physical stride */
-        for (int y = vp_y0; y < vp_y1 - FONT_H; y++) {
-            uint8_t *dst = s_fb[0] + (y * FB_W + vp_x0) * BYTES_PER_PIX;
+        /* Partial-width viewport: copy one physical row at a time */
+        for (int py = vp_py0; py < vp_py1 - char_h_phys; py++) {
+            uint8_t *dst = s_fb[0] + py * row_bytes + vp_px0 * BYTES_PER_PIX;
             uint8_t *src = dst + char_bytes;
-            memmove(dst, src, vp_w * BYTES_PER_PIX);
+            memmove(dst, src, vp_pw);
         }
-        rgb888_t bg = s_palette[s_bg & 0xF];
-        for (int y = vp_y1 - FONT_H; y < vp_y1; y++) {
-            uint8_t *p = s_fb[0] + (y * FB_W + vp_x0) * BYTES_PER_PIX;
-            for (int x = 0; x < vp_w; x++) {
+        for (int py = vp_py1 - char_h_phys; py < vp_py1; py++) {
+            uint8_t *p = s_fb[0] + py * row_bytes + vp_px0 * BYTES_PER_PIX;
+            for (int pp = 0; pp < (vp_px1 - vp_px0); pp++) {
                 p[0] = bg.r; p[1] = bg.g; p[2] = bg.b;
                 p += BYTES_PER_PIX;
             }
@@ -510,6 +565,7 @@ static void vdu_process(uint8_t c)
         if (mode < 0 || mode > 18) mode = 0;
         s_mode_w = mode_dims[mode].w;
         s_mode_h = mode_dims[mode].h;
+        scale_update();   /* recompute scale + centre offset for new mode */
         palette_reset();
         s_fg = 15; s_bg = 0;
         s_vp_left = 0; s_vp_top = 0;
@@ -784,6 +840,7 @@ esp_err_t mos_vdp_internal_init(esp_lcd_panel_handle_t dpi_panel)
     /* Reset palette and screen state — default mode 0 = 640×480 */
     s_mode_w = 640;
     s_mode_h = 480;
+    scale_update();   /* compute s_scale, s_off_x, s_off_y for mode 0 */
     palette_reset();
     s_fg = 15; s_bg = 0;
     s_vp_left = 0; s_vp_top = 0;
@@ -835,28 +892,16 @@ esp_err_t mos_vdp_internal_init(esp_lcd_panel_handle_t dpi_panel)
     }
 
     s_initialized = true;
-    ESP_LOGI(TAG, "Internal VDP ready — fb=%dx%d mode=%dx%d (%d cols×%d rows)",
-             FB_W, FB_H, s_mode_w, s_mode_h, COLS, ROWS);
+    ESP_LOGI(TAG, "Internal VDP ready — fb=%dx%d mode=%dx%d scale=%d off=(%d,%d) (%d cols×%d rows)",
+             FB_W, FB_H, s_mode_w, s_mode_h, s_scale, s_off_x, s_off_y, COLS, ROWS);
     return ESP_OK;
 }
 
 void mos_vdp_internal_putch(uint8_t c)
 {
-    if (!s_vdu_queue) {
-        ESP_LOGE(TAG, "putch(0x%02X) — queue NULL!", c);
-        return;
-    }
-    static int s_put_count = 0;
-    if (s_put_count < 5) {
-        ESP_LOGI(TAG, "putch[%d] 0x%02X queue_spaces=%d",
-                 s_put_count, c, (int)uxQueueSpacesAvailable(s_vdu_queue));
-        s_put_count++;
-    }
+    if (!s_vdu_queue) return;
     /* Non-blocking: if queue is full, drop the byte (overflow) */
-    BaseType_t sent = xQueueSend(s_vdu_queue, &c, 0);
-    if (sent != pdTRUE && s_put_count <= 10) {
-        ESP_LOGW(TAG, "putch OVERFLOW — queue full, byte 0x%02X dropped", c);
-    }
+    xQueueSend(s_vdu_queue, &c, 0);
 }
 
 int mos_vdp_internal_getch(void)
