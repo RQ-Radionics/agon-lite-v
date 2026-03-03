@@ -98,9 +98,17 @@ static esp_err_t audio_init_common(i2c_master_bus_handle_t bus)
     ESP_RETURN_ON_ERROR(
         i2s_channel_init_std_mode(s_audio.i2s_rx, &std_cfg),
         TAG, "i2s_init RX");
-    /* NOTE: do NOT call i2s_channel_enable here.
-     * esp_codec_dev calls i2s_channel_enable internally when esp_codec_dev_open()
-     * is called. Enabling channels here would cause a double-enable error. */
+
+    /* Enable I2S channels NOW — before touching ES8311 over I2C.
+     * This matches the BSP sequence: bsp_audio_init() enables channels
+     * immediately, then bsp_audio_codec_speaker_init() opens the codec.
+     * MCLK must be running before the ES8311 will accept I2C writes.
+     * esp_codec_dev_open() will call i2s_channel_enable() again but the
+     * driver is idempotent for already-enabled channels. */
+    ESP_RETURN_ON_ERROR(
+        i2s_channel_enable(s_audio.i2s_tx), TAG, "i2s_enable TX");
+    ESP_RETURN_ON_ERROR(
+        i2s_channel_enable(s_audio.i2s_rx), TAG, "i2s_enable RX");
 
     /* --- esp_codec_dev data interface -------------------------------- */
     audio_codec_i2s_cfg_t i2s_cfg = {
