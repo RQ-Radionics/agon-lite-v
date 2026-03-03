@@ -211,6 +211,7 @@ typedef struct {
     i2s_chan_handle_t        i2s_tx;
     i2s_chan_handle_t        i2s_rx;
     bool                     initialized;
+    bool                     bus_owned;  /* true = we created the bus, we must delete it */
 } mos_audio_t;
 
 static mos_audio_t s_audio = { 0 };
@@ -234,6 +235,18 @@ static esp_err_t es_read(uint8_t reg, uint8_t *val)
 /* ------------------------------------------------------------------ */
 static esp_err_t es8311_init(void)
 {
+    /* Pre-check: verify ES8311 is reachable before writing */
+    {
+        uint8_t probe = 0;
+        esp_err_t rc = es_read(ES8311_REG_CLK1, &probe);
+        if (rc != ESP_OK) {
+            ESP_LOGE(TAG, "ES8311 not responding before reset (err=0x%x %s)",
+                     rc, esp_err_to_name(rc));
+            return rc;
+        }
+        ESP_LOGD(TAG, "ES8311 probe OK (CLK1=0x%02X)", probe);
+    }
+
     /* Step 1: Reset chip */
     ESP_RETURN_ON_ERROR(es_write(ES8311_REG_RESET, 0x1F), TAG, "reset");
     vTaskDelay(pdMS_TO_TICKS(5));
@@ -353,6 +366,38 @@ static esp_err_t i2s_init(void)
 /* Public API                                                           */
 /* ------------------------------------------------------------------ */
 
+/* Common init path after I2C bus + device are set up */
+static esp_err_t audio_init_common(void)
+{
+    /* --- 3. Initialize I2S (must come before ES8311 so MCLK is running) --- */
+    {
+        esp_err_t ret = i2s_init();
+        if (ret != ESP_OK) {
+            i2c_master_bus_rm_device(s_audio.i2c_dev);
+            if (s_audio.bus_owned) i2c_del_master_bus(s_audio.i2c_bus);
+            return ret;
+        }
+    }
+
+    /* --- 4. Initialize ES8311 via I2C --- */
+    {
+        esp_err_t ret = es8311_init();
+        if (ret != ESP_OK) {
+            i2s_channel_disable(s_audio.i2s_tx);
+            i2s_channel_disable(s_audio.i2s_rx);
+            i2s_del_channel(s_audio.i2s_tx);
+            i2s_del_channel(s_audio.i2s_rx);
+            i2c_master_bus_rm_device(s_audio.i2c_dev);
+            if (s_audio.bus_owned) i2c_del_master_bus(s_audio.i2c_bus);
+            return ret;
+        }
+    }
+
+    s_audio.initialized = true;
+    ESP_LOGI(TAG, "mos_audio initialized successfully");
+    return ESP_OK;
+}
+
 esp_err_t mos_audio_init(void)
 {
     ESP_RETURN_ON_FALSE(!s_audio.initialized, ESP_ERR_INVALID_STATE,
@@ -370,12 +415,12 @@ esp_err_t mos_audio_init(void)
         };
         ESP_RETURN_ON_ERROR(gpio_config(&pwr_cfg), TAG, "pwr gpio config");
         gpio_set_level(CONFIG_MOS_AUDIO_PWR_GPIO, 0);  /* active LOW = power ON */
-        vTaskDelay(pdMS_TO_TICKS(10));  /* give codec time to boot */
+        vTaskDelay(pdMS_TO_TICKS(50));  /* ES8311 datasheet: ≥20ms after VDD stable */
         ESP_LOGI(TAG, "Codec power ON (GPIO%d=LOW)", CONFIG_MOS_AUDIO_PWR_GPIO);
     }
 #endif
 
-    /* --- 2. Create I2C bus on I2C_NUM_0 --- */
+    /* --- 2. Create I2C bus --- */
     {
         i2c_master_bus_config_t bus_cfg = {
             .i2c_port            = CONFIG_MOS_AUDIO_I2C_PORT,
@@ -388,6 +433,7 @@ esp_err_t mos_audio_init(void)
         ESP_RETURN_ON_ERROR(
             i2c_new_master_bus(&bus_cfg, &s_audio.i2c_bus),
             TAG, "i2c_new_master_bus");
+        s_audio.bus_owned = true;
 
         i2c_device_config_t dev_cfg = {
             .scl_speed_hz   = 400000,
@@ -398,32 +444,49 @@ esp_err_t mos_audio_init(void)
             TAG, "add ES8311 I2C device");
     }
 
-    /* --- 3. Initialize I2S (must come before ES8311 so MCLK is running) --- */
-    {
-        esp_err_t ret = i2s_init();
-        if (ret != ESP_OK) {
-            i2c_del_master_bus(s_audio.i2c_bus);
-            return ret;
-        }
-    }
-
-    /* --- 4. Initialize ES8311 via I2C --- */
-    {
-        esp_err_t ret = es8311_init();
-        if (ret != ESP_OK) {
-            i2s_channel_disable(s_audio.i2s_tx);
-            i2s_channel_disable(s_audio.i2s_rx);
-            i2s_del_channel(s_audio.i2s_tx);
-            i2s_del_channel(s_audio.i2s_rx);
-            i2c_del_master_bus(s_audio.i2c_bus);
-            return ret;
-        }
-    }
-
-    s_audio.initialized = true;
-    ESP_LOGI(TAG, "mos_audio initialized successfully");
-    return ESP_OK;
+    return audio_init_common();
 }
+
+esp_err_t mos_audio_init_with_bus(i2c_master_bus_handle_t bus)
+{
+    ESP_RETURN_ON_FALSE(!s_audio.initialized, ESP_ERR_INVALID_STATE,
+                        TAG, "already initialized");
+    ESP_RETURN_ON_FALSE(bus != NULL, ESP_ERR_INVALID_ARG,
+                        TAG, "bus handle is NULL");
+
+    /* --- 1. Power on codec: GPIO6 active LOW --- */
+#if CONFIG_MOS_AUDIO_PWR_GPIO >= 0
+    {
+        gpio_config_t pwr_cfg = {
+            .pin_bit_mask = (1ULL << CONFIG_MOS_AUDIO_PWR_GPIO),
+            .mode         = GPIO_MODE_OUTPUT,
+            .pull_up_en   = GPIO_PULLUP_DISABLE,
+            .pull_down_en = GPIO_PULLDOWN_DISABLE,
+            .intr_type    = GPIO_INTR_DISABLE,
+        };
+        ESP_RETURN_ON_ERROR(gpio_config(&pwr_cfg), TAG, "pwr gpio config");
+        gpio_set_level(CONFIG_MOS_AUDIO_PWR_GPIO, 0);
+        vTaskDelay(pdMS_TO_TICKS(50));  /* ES8311 datasheet: ≥20ms after VDD stable */
+        ESP_LOGI(TAG, "Codec power ON (GPIO%d=LOW)", CONFIG_MOS_AUDIO_PWR_GPIO);
+    }
+#endif
+
+    /* --- 2. Use existing bus, just add ES8311 device --- */
+    s_audio.i2c_bus  = bus;
+    s_audio.bus_owned = false;  /* caller owns the bus, we must not delete it */
+
+    i2c_device_config_t dev_cfg = {
+        .scl_speed_hz   = 400000,
+        .device_address = ES8311_ADDR,
+    };
+    ESP_RETURN_ON_ERROR(
+        i2c_master_bus_add_device(s_audio.i2c_bus, &dev_cfg, &s_audio.i2c_dev),
+        TAG, "add ES8311 I2C device");
+
+    return audio_init_common();
+}
+
+
 
 int mos_audio_write(const int16_t *samples, size_t num_samples, uint32_t timeout_ms)
 {
@@ -482,7 +545,8 @@ void mos_audio_deinit(void)
     i2s_channel_disable(s_audio.i2s_rx);
     i2s_del_channel(s_audio.i2s_tx);
     i2s_del_channel(s_audio.i2s_rx);
-    i2c_del_master_bus(s_audio.i2c_bus);  /* removes ES8311 device too */
+    i2c_master_bus_rm_device(s_audio.i2c_dev);
+    if (s_audio.bus_owned) i2c_del_master_bus(s_audio.i2c_bus);
 
     memset(&s_audio, 0, sizeof(s_audio));
     ESP_LOGI(TAG, "mos_audio de-initialized");

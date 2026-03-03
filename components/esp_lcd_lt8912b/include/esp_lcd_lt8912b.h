@@ -50,10 +50,10 @@ typedef struct {
 } esp_lcd_lt8912b_config_t;
 
 /**
- * @brief Initialize the LT8912B chip via I2C.
+ * @brief Initialize the LT8912B chip via I2C (creates its own bus).
  *
  * Verifies chip ID, then programs all registers for 640×480@60Hz output
- * via 2-lane MIPI DSI input.  Keeps the I2C bus open for HPD polling.
+ * via 2-lane MIPI DSI input.  Creates and owns the I2C master bus.
  *
  * Must be called after esp_lcd_new_dsi_bus() and before
  * esp_lcd_new_panel_dpi() / esp_lcd_panel_init().
@@ -63,6 +63,30 @@ typedef struct {
  *         or an esp_err_t from the I2C driver on communication error.
  */
 esp_err_t esp_lcd_lt8912b_init(const esp_lcd_lt8912b_config_t *config);
+
+/**
+ * @brief Initialize the LT8912B chip using an existing I2C bus handle.
+ *
+ * Same as esp_lcd_lt8912b_init() but uses a bus already created by the
+ * caller.  The driver does NOT own the bus and will NOT delete it on
+ * esp_lcd_lt8912b_deinit().
+ *
+ * Use this when another driver (e.g. mos_audio ES8311) shares the same
+ * physical I2C bus — create the bus once in app code, pass the handle
+ * to both drivers.  This avoids the ESP_ERR_INVALID_STATE that occurs
+ * when one driver creates a bus that another then tries to re-use after
+ * the IDF I2C FSM is left in a non-DONE state.
+ *
+ * @param  bus     Existing I2C master bus handle. Must remain valid for
+ *                 the lifetime of the LT8912B driver.
+ * @param  config  LT8912B configuration (hpd_gpio, hdmi_mode).
+ *                 i2c_port / sda_gpio / scl_gpio are ignored (bus is
+ *                 already open).
+ * @return ESP_OK on success, ESP_ERR_NOT_FOUND if chip not detected,
+ *         or an esp_err_t from the I2C driver on communication error.
+ */
+esp_err_t esp_lcd_lt8912b_init_with_bus(i2c_master_bus_handle_t bus,
+                                         const esp_lcd_lt8912b_config_t *config);
 
 /**
  * @brief Check whether an HDMI cable is connected.
@@ -93,6 +117,17 @@ bool esp_lcd_lt8912b_is_connected(void);
  * @return ESP_OK on success, ESP_ERR_INVALID_ARG if dsi_bus is NULL
  */
 esp_err_t esp_lcd_lt8912b_patch_dsi_eotp(esp_lcd_dsi_bus_handle_t dsi_bus);
+
+/**
+ * @brief Get the I2C master bus handle used by the LT8912B driver.
+ *
+ * Returns the bus handle created by esp_lcd_lt8912b_init(), so other
+ * drivers on the same physical bus (e.g. ES8311 audio codec) can share
+ * it without creating a second master bus on the same port.
+ *
+ * @return I2C bus handle, or NULL if not initialized.
+ */
+i2c_master_bus_handle_t esp_lcd_lt8912b_get_i2c_bus(void);
 
 /**
  * @brief De-initialize and release I2C resources.

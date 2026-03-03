@@ -69,6 +69,7 @@ typedef struct {
     i2c_master_dev_handle_t  dev_audio;     /* 0x4A */
     int                      hpd_gpio;
     bool                     initialized;
+    bool                     bus_owned;     /* true = we created bus, we must delete it */
 } lt8912b_t;
 
 static lt8912b_t s_lt = { 0 };
@@ -359,14 +360,67 @@ static void lt8912b_hpd_gpio_init(int gpio)
 /* Public API                                                           */
 /* ------------------------------------------------------------------ */
 
+/* ------------------------------------------------------------------ */
+/* Common init path (bus + devices already set up in s_lt)             */
+/* ------------------------------------------------------------------ */
+static esp_err_t lt8912b_init_common(bool hdmi_mode, int hpd_gpio)
+{
+    esp_err_t ret = ESP_OK;
+
+    /* --- Verify chip ID --- */
+    uint8_t id_h = 0, id_l = 0;
+    ESP_GOTO_ON_ERROR(lt_read(s_lt.dev_main, LT8912B_REG_CHIP_ID_H, &id_h),
+                      err_devs, TAG, "chip ID read H failed");
+    ESP_GOTO_ON_ERROR(lt_read(s_lt.dev_main, LT8912B_REG_CHIP_ID_L, &id_l),
+                      err_devs, TAG, "chip ID read L failed");
+
+    if (id_h != LT8912B_CHIP_ID_H || id_l != LT8912B_CHIP_ID_L) {
+        ESP_LOGE(TAG, "Chip ID mismatch: got 0x%02X%02X, expected 0x12B2", id_h, id_l);
+        ret = ESP_ERR_NOT_FOUND;
+        goto err_devs;
+    }
+    ESP_LOGI(TAG, "LT8912B detected (ID 0x%02X%02X)", id_h, id_l);
+
+    /* --- Program chip registers --- */
+    ESP_GOTO_ON_ERROR(lt8912b_write_init_config(),  err_devs, TAG, "init_config");
+    ESP_GOTO_ON_ERROR(lt8912b_write_mipi_basic(),   err_devs, TAG, "mipi_basic");
+    ESP_GOTO_ON_ERROR(lt8912b_write_video_timing(), err_devs, TAG, "video_timing");
+    ESP_GOTO_ON_ERROR(lt8912b_write_dds_config(),   err_devs, TAG, "dds_config");
+    ESP_GOTO_ON_ERROR(lt8912b_write_rxlogicres(),   err_devs, TAG, "rxlogicres");
+    ESP_GOTO_ON_ERROR(lt8912b_write_lvds_config(hdmi_mode),
+                                                    err_devs, TAG, "lvds_config");
+
+    /* --- HPD GPIO --- */
+    s_lt.hpd_gpio = hpd_gpio;
+    lt8912b_hpd_gpio_init(s_lt.hpd_gpio);
+
+    s_lt.initialized = true;
+    ESP_LOGI(TAG, "LT8912B initialized — 640x480@60Hz %s output",
+             hdmi_mode ? "HDMI" : "DVI");
+
+    if (esp_lcd_lt8912b_is_connected()) {
+        ESP_LOGI(TAG, "HDMI cable connected");
+    } else {
+        ESP_LOGW(TAG, "HDMI cable not detected");
+    }
+    return ESP_OK;
+
+err_devs:
+    /* Remove device handles we added; bus cleanup is caller's responsibility */
+    if (s_lt.dev_audio)   { i2c_master_bus_rm_device(s_lt.dev_audio);   s_lt.dev_audio   = NULL; }
+    if (s_lt.dev_cec_dsi) { i2c_master_bus_rm_device(s_lt.dev_cec_dsi); s_lt.dev_cec_dsi = NULL; }
+    if (s_lt.dev_main)    { i2c_master_bus_rm_device(s_lt.dev_main);     s_lt.dev_main    = NULL; }
+    if (s_lt.bus_owned && s_lt.bus) { i2c_del_master_bus(s_lt.bus); s_lt.bus = NULL; }
+    memset(&s_lt, 0, sizeof(s_lt));
+    return ret;
+}
+
 esp_err_t esp_lcd_lt8912b_init(const esp_lcd_lt8912b_config_t *config)
 {
     ESP_RETURN_ON_FALSE(config != NULL, ESP_ERR_INVALID_ARG, TAG, "config is NULL");
-    ESP_RETURN_ON_FALSE(!s_lt.initialized,  ESP_ERR_INVALID_STATE, TAG, "already initialized");
+    ESP_RETURN_ON_FALSE(!s_lt.initialized, ESP_ERR_INVALID_STATE, TAG, "already initialized");
 
-    esp_err_t ret = ESP_OK;
-
-    /* --- 1. Create I2C master bus on the specified port --- */
+    /* --- Create I2C master bus --- */
     i2c_master_bus_config_t bus_cfg = {
         .i2c_port            = config->i2c_port,
         .sda_io_num          = config->sda_gpio,
@@ -377,67 +431,73 @@ esp_err_t esp_lcd_lt8912b_init(const esp_lcd_lt8912b_config_t *config)
     };
     ESP_RETURN_ON_ERROR(i2c_new_master_bus(&bus_cfg, &s_lt.bus),
                         TAG, "i2c_new_master_bus failed");
+    s_lt.bus_owned = true;
 
-    /* --- 2. Add three device handles --- */
-    i2c_device_config_t dev_cfg = {
-        .scl_speed_hz = 400000,
-        .device_address = LT8912B_ADDR_MAIN,
-    };
-    ESP_GOTO_ON_ERROR(i2c_master_bus_add_device(s_lt.bus, &dev_cfg, &s_lt.dev_main),
-                      err_bus, TAG, "add dev 0x48 failed");
-
+    /* --- Add three device handles --- */
+    i2c_device_config_t dev_cfg = { .scl_speed_hz = 400000,
+                                    .device_address = LT8912B_ADDR_MAIN };
+    if (i2c_master_bus_add_device(s_lt.bus, &dev_cfg, &s_lt.dev_main) != ESP_OK) {
+        ESP_LOGE(TAG, "add dev 0x48 failed");
+        i2c_del_master_bus(s_lt.bus);
+        memset(&s_lt, 0, sizeof(s_lt));
+        return ESP_FAIL;
+    }
     dev_cfg.device_address = LT8912B_ADDR_CEC_DSI;
-    ESP_GOTO_ON_ERROR(i2c_master_bus_add_device(s_lt.bus, &dev_cfg, &s_lt.dev_cec_dsi),
-                      err_bus, TAG, "add dev 0x49 failed");
-
+    if (i2c_master_bus_add_device(s_lt.bus, &dev_cfg, &s_lt.dev_cec_dsi) != ESP_OK) {
+        ESP_LOGE(TAG, "add dev 0x49 failed");
+        i2c_master_bus_rm_device(s_lt.dev_main);
+        i2c_del_master_bus(s_lt.bus);
+        memset(&s_lt, 0, sizeof(s_lt));
+        return ESP_FAIL;
+    }
     dev_cfg.device_address = LT8912B_ADDR_AUDIO;
-    ESP_GOTO_ON_ERROR(i2c_master_bus_add_device(s_lt.bus, &dev_cfg, &s_lt.dev_audio),
-                      err_bus, TAG, "add dev 0x4A failed");
-
-    /* --- 3. Verify chip ID --- */
-    uint8_t id_h = 0, id_l = 0;
-    ESP_GOTO_ON_ERROR(lt_read(s_lt.dev_main, LT8912B_REG_CHIP_ID_H, &id_h),
-                      err_bus, TAG, "chip ID read H failed");
-    ESP_GOTO_ON_ERROR(lt_read(s_lt.dev_main, LT8912B_REG_CHIP_ID_L, &id_l),
-                      err_bus, TAG, "chip ID read L failed");
-
-    if (id_h != LT8912B_CHIP_ID_H || id_l != LT8912B_CHIP_ID_L) {
-        ESP_LOGE(TAG, "Chip ID mismatch: got 0x%02X%02X, expected 0x12B2", id_h, id_l);
-        ret = ESP_ERR_NOT_FOUND;
-        goto err_bus;
-    }
-    ESP_LOGI(TAG, "LT8912B detected (ID 0x%02X%02X)", id_h, id_l);
-
-    /* --- 4. Program chip registers --- */
-    ESP_GOTO_ON_ERROR(lt8912b_write_init_config(),  err_bus, TAG, "init_config");
-    ESP_GOTO_ON_ERROR(lt8912b_write_mipi_basic(),   err_bus, TAG, "mipi_basic");
-    ESP_GOTO_ON_ERROR(lt8912b_write_video_timing(), err_bus, TAG, "video_timing");
-    ESP_GOTO_ON_ERROR(lt8912b_write_dds_config(),   err_bus, TAG, "dds_config");
-    ESP_GOTO_ON_ERROR(lt8912b_write_rxlogicres(),   err_bus, TAG, "rxlogicres");
-    ESP_GOTO_ON_ERROR(lt8912b_write_lvds_config(config->hdmi_mode),
-                                                    err_bus, TAG, "lvds_config");
-
-    /* --- 5. HPD GPIO --- */
-    s_lt.hpd_gpio = config->hpd_gpio;
-    lt8912b_hpd_gpio_init(s_lt.hpd_gpio);
-
-    s_lt.initialized = true;
-    ESP_LOGI(TAG, "LT8912B initialized — 640x480@60Hz %s output",
-             config->hdmi_mode ? "HDMI" : "DVI");
-
-    /* Log HPD state immediately */
-    if (esp_lcd_lt8912b_is_connected()) {
-        ESP_LOGI(TAG, "HDMI cable connected");
-    } else {
-        ESP_LOGW(TAG, "HDMI cable not detected");
+    if (i2c_master_bus_add_device(s_lt.bus, &dev_cfg, &s_lt.dev_audio) != ESP_OK) {
+        ESP_LOGE(TAG, "add dev 0x4A failed");
+        i2c_master_bus_rm_device(s_lt.dev_cec_dsi);
+        i2c_master_bus_rm_device(s_lt.dev_main);
+        i2c_del_master_bus(s_lt.bus);
+        memset(&s_lt, 0, sizeof(s_lt));
+        return ESP_FAIL;
     }
 
-    return ESP_OK;
+    return lt8912b_init_common(config->hdmi_mode, config->hpd_gpio);
+}
 
-err_bus:
-    i2c_del_master_bus(s_lt.bus);
-    memset(&s_lt, 0, sizeof(s_lt));
-    return ret;
+esp_err_t esp_lcd_lt8912b_init_with_bus(i2c_master_bus_handle_t bus,
+                                         const esp_lcd_lt8912b_config_t *config)
+{
+    ESP_RETURN_ON_FALSE(bus    != NULL, ESP_ERR_INVALID_ARG,   TAG, "bus is NULL");
+    ESP_RETURN_ON_FALSE(config != NULL, ESP_ERR_INVALID_ARG,   TAG, "config is NULL");
+    ESP_RETURN_ON_FALSE(!s_lt.initialized, ESP_ERR_INVALID_STATE, TAG, "already initialized");
+
+    s_lt.bus       = bus;
+    s_lt.bus_owned = false;   /* caller owns the bus; we must not delete it */
+
+    /* --- Add three device handles to the shared bus --- */
+    i2c_device_config_t dev_cfg = { .scl_speed_hz = 400000,
+                                    .device_address = LT8912B_ADDR_MAIN };
+    if (i2c_master_bus_add_device(s_lt.bus, &dev_cfg, &s_lt.dev_main) != ESP_OK) {
+        ESP_LOGE(TAG, "add dev 0x48 failed");
+        memset(&s_lt, 0, sizeof(s_lt));
+        return ESP_FAIL;
+    }
+    dev_cfg.device_address = LT8912B_ADDR_CEC_DSI;
+    if (i2c_master_bus_add_device(s_lt.bus, &dev_cfg, &s_lt.dev_cec_dsi) != ESP_OK) {
+        ESP_LOGE(TAG, "add dev 0x49 failed");
+        i2c_master_bus_rm_device(s_lt.dev_main);
+        memset(&s_lt, 0, sizeof(s_lt));
+        return ESP_FAIL;
+    }
+    dev_cfg.device_address = LT8912B_ADDR_AUDIO;
+    if (i2c_master_bus_add_device(s_lt.bus, &dev_cfg, &s_lt.dev_audio) != ESP_OK) {
+        ESP_LOGE(TAG, "add dev 0x4A failed");
+        i2c_master_bus_rm_device(s_lt.dev_cec_dsi);
+        i2c_master_bus_rm_device(s_lt.dev_main);
+        memset(&s_lt, 0, sizeof(s_lt));
+        return ESP_FAIL;
+    }
+
+    return lt8912b_init_common(config->hdmi_mode, config->hpd_gpio);
 }
 
 bool esp_lcd_lt8912b_is_connected(void)
@@ -457,11 +517,23 @@ bool esp_lcd_lt8912b_is_connected(void)
     return (val & 0x80) != 0;
 }
 
+i2c_master_bus_handle_t esp_lcd_lt8912b_get_i2c_bus(void)
+{
+    return s_lt.initialized ? s_lt.bus : NULL;
+}
+
 void esp_lcd_lt8912b_deinit(void)
 {
     if (!s_lt.initialized) return;
 
-    i2c_del_master_bus(s_lt.bus);   /* removes all attached devices too */
+    /* Always remove our device handles explicitly */
+    if (s_lt.dev_audio)   i2c_master_bus_rm_device(s_lt.dev_audio);
+    if (s_lt.dev_cec_dsi) i2c_master_bus_rm_device(s_lt.dev_cec_dsi);
+    if (s_lt.dev_main)    i2c_master_bus_rm_device(s_lt.dev_main);
+
+    /* Only delete the bus if we created it */
+    if (s_lt.bus_owned && s_lt.bus) i2c_del_master_bus(s_lt.bus);
+
     memset(&s_lt, 0, sizeof(s_lt));
     ESP_LOGI(TAG, "LT8912B de-initialized");
 }

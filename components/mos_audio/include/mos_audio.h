@@ -30,6 +30,7 @@
 #include <stddef.h>
 #include "esp_err.h"
 #include "driver/i2s_std.h"
+#include "driver/i2c_master.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -44,6 +45,19 @@ extern "C" {
  * @return ESP_OK on success, or an esp_err_t on failure.
  */
 esp_err_t mos_audio_init(void);
+
+/**
+ * @brief Initialize the ES8311 codec using an existing I2C bus handle.
+ *
+ * Same as mos_audio_init() but skips creating a new I2C master bus.
+ * Use this when another driver (e.g. esp_lcd_lt8912b) already owns the
+ * I2C bus on the same port.
+ *
+ * @param  bus  Existing I2C master bus handle to use. Must remain valid
+ *              for the lifetime of the audio driver.
+ * @return ESP_OK on success, or an esp_err_t on failure.
+ */
+esp_err_t mos_audio_init_with_bus(i2c_master_bus_handle_t bus);
 
 /**
  * @brief Write PCM audio samples to the DAC output.

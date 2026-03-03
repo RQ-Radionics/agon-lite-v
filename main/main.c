@@ -28,11 +28,15 @@
 #include "mos_net.h"
 #include "mos_sntp.h"
 #include "mos_vdp.h"
+#include "mos_vdp_router.h"
 
 #ifdef CONFIG_LT8912B_ENABLED
 #include "esp_lcd_panel_ops.h"
 #include "esp_lcd_mipi_dsi.h"
 #include "esp_lcd_lt8912b.h"
+#include "esp_ldo_regulator.h"
+#include "esp_cache.h"
+#include "driver/i2c_master.h"
 #endif
 
 #ifdef CONFIG_MOS_AUDIO_ENABLED
@@ -64,11 +68,36 @@ static void mos_kbd_scancode_stub(uint8_t byte)
 /*                                                                      */
 /* Returns the DPI panel handle so callers can access the framebuffer  */
 /* via esp_lcd_dpi_panel_get_frame_buffer().  Returns NULL on failure. */
+/*                                                                      */
+/* The shared I2C bus (ES8311 + LT8912B live on the same bus) is kept  */
+/* in s_shared_i2c_bus so that mos_audio can call                      */
+/* mos_audio_init_with_bus(s_shared_i2c_bus) after HDMI init.          */
 /* ------------------------------------------------------------------ */
 #ifdef CONFIG_LT8912B_ENABLED
+static i2c_master_bus_handle_t s_shared_i2c_bus = NULL;
+
 static esp_lcd_panel_handle_t hdmi_init(void)
 {
+    /* 0. Power on MIPI DSI PHY via internal LDO regulator (LDO_VO3 → 2500 mV).
+     *    The DSI PHY requires VDD_MIPI_DPHY = 2.5V to start up.  Without this
+     *    the PHY PLL never locks and esp_lcd_new_dsi_bus() hangs indefinitely.
+     *    The LDO handle is kept alive for the lifetime of the application. */
+    {
+        esp_ldo_channel_handle_t ldo_dphy = NULL;
+        esp_ldo_channel_config_t ldo_cfg = {
+            .chan_id    = 3,      /* LDO_VO3 → VDD_MIPI_DPHY on ESP32-P4 devkits */
+            .voltage_mv = 2500,
+        };
+        esp_err_t ldo_ret = esp_ldo_acquire_channel(&ldo_cfg, &ldo_dphy);
+        if (ldo_ret != ESP_OK) {
+            ESP_LOGW(TAG, "HDMI: LDO3 acquire failed (0x%x) — PHY power may come from external supply", ldo_ret);
+        } else {
+            ESP_LOGI(TAG, "HDMI: MIPI DPHY powered via LDO3 @ 2500mV");
+        }
+    }
+
     /* 1. Create MIPI DSI bus (2-lane, 350 Mbps, XTAL PLL source) */
+    ESP_LOGI(TAG, "HDMI: step 1 — DSI bus init");
     esp_lcd_dsi_bus_handle_t dsi_bus = NULL;
     esp_lcd_dsi_bus_config_t bus_cfg = {
         .bus_id             = 0,
@@ -80,27 +109,64 @@ static esp_lcd_panel_handle_t hdmi_init(void)
         ESP_LOGE(TAG, "HDMI: DSI bus init failed");
         return NULL;
     }
+    ESP_LOGI(TAG, "HDMI: step 1 OK");
 
     /* 2. Patch: disable EoTP — LT8912B cannot handle it */
+    ESP_LOGI(TAG, "HDMI: step 2 — EoTP patch");
     if (esp_lcd_lt8912b_patch_dsi_eotp(dsi_bus) != ESP_OK) {
         ESP_LOGE(TAG, "HDMI: EoTP patch failed");
         esp_lcd_del_dsi_bus(dsi_bus);
         return NULL;
     }
+    ESP_LOGI(TAG, "HDMI: step 2 OK");
 
-    /* 3. Initialize LT8912B via I2C (programs all registers for 640x480@60Hz) */
+    /* 3. Create the shared I2C bus (ES8311 audio codec and LT8912B both live
+     *    on this bus — GPIO7/SDA, GPIO8/SCL, 400 kHz, I2C port 1).
+     *    Creating it here, before any driver touches I2C, guarantees a clean
+     *    FSM state.  Both esp_lcd_lt8912b_init_with_bus() and
+     *    mos_audio_init_with_bus() add their devices to this same handle
+     *    without fighting over bus ownership. */
+    ESP_LOGI(TAG, "HDMI: step 3 — shared I2C bus + LT8912B init");
+    {
+        i2c_master_bus_config_t bus_cfg_i2c = {
+            .i2c_port            = CONFIG_LT8912B_I2C_PORT,
+            .sda_io_num          = CONFIG_LT8912B_SDA_GPIO,
+            .scl_io_num          = CONFIG_LT8912B_SCL_GPIO,
+            .clk_source          = I2C_CLK_SRC_DEFAULT,
+            .glitch_ignore_cnt   = 7,
+            .flags.enable_internal_pullup = true,
+        };
+        if (i2c_new_master_bus(&bus_cfg_i2c, &s_shared_i2c_bus) != ESP_OK) {
+            ESP_LOGE(TAG, "HDMI: shared I2C bus creation failed");
+            esp_lcd_del_dsi_bus(dsi_bus);
+            return NULL;
+        }
+
+        /* Scan the bus to verify devices are present (diagnostic only) */
+        ESP_LOGI(TAG, "HDMI: I2C%d scan (SDA=%d SCL=%d):",
+                 CONFIG_LT8912B_I2C_PORT,
+                 CONFIG_LT8912B_SDA_GPIO, CONFIG_LT8912B_SCL_GPIO);
+        for (uint8_t addr = 0x08; addr <= 0x77; addr++) {
+            if (i2c_master_probe(s_shared_i2c_bus, addr, 20) == ESP_OK) {
+                ESP_LOGI(TAG, "  I2C device found at 0x%02X", addr);
+            }
+        }
+    }
+
+    /* Initialize LT8912B using the shared bus handle (does NOT own the bus) */
     esp_lcd_lt8912b_config_t lt_cfg = {
-        .i2c_port  = CONFIG_LT8912B_I2C_PORT,
-        .sda_gpio  = CONFIG_LT8912B_SDA_GPIO,
-        .scl_gpio  = CONFIG_LT8912B_SCL_GPIO,
         .hpd_gpio  = CONFIG_LT8912B_HPD_GPIO,
         .hdmi_mode = CONFIG_LT8912B_HDMI_MODE,
+        /* i2c_port / sda_gpio / scl_gpio ignored by init_with_bus */
     };
-    if (esp_lcd_lt8912b_init(&lt_cfg) != ESP_OK) {
+    if (esp_lcd_lt8912b_init_with_bus(s_shared_i2c_bus, &lt_cfg) != ESP_OK) {
         ESP_LOGE(TAG, "HDMI: LT8912B I2C init failed");
+        i2c_del_master_bus(s_shared_i2c_bus);
+        s_shared_i2c_bus = NULL;
         esp_lcd_del_dsi_bus(dsi_bus);
         return NULL;
     }
+    ESP_LOGI(TAG, "HDMI: step 3 OK");
 
     /* 4. Create DPI panel — feeds pixel data from ESP32-P4 to LT8912B DSI input.
      *    640x480 @ 25.175 MHz pixel clock, RGB888 (24-bit).
@@ -110,7 +176,7 @@ static esp_lcd_panel_handle_t hdmi_init(void)
     esp_lcd_panel_handle_t panel = NULL;
     esp_lcd_dpi_panel_config_t dpi_cfg = {
         .dpi_clk_src         = MIPI_DSI_DPI_CLK_SRC_DEFAULT,
-        .dpi_clock_freq_mhz  = 25,          /* 25 MHz ≈ 25.175; close enough for PLL */
+        .dpi_clock_freq_mhz  = 25,          /* target 25.175 MHz; actual = lane_bit_rate/8/div */
         .pixel_format        = LCD_COLOR_PIXEL_FORMAT_RGB888,
         .num_fbs             = 2,           /* double-buffered for tear-free rendering */
         .video_timing = {
@@ -125,16 +191,44 @@ static esp_lcd_panel_handle_t hdmi_init(void)
         },
         .flags.disable_lp    = 1,
     };
+    ESP_LOGI(TAG, "HDMI: step 4 — DPI panel create");
     if (esp_lcd_new_panel_dpi(dsi_bus, &dpi_cfg, &panel) != ESP_OK) {
         ESP_LOGE(TAG, "HDMI: DPI panel init failed");
         esp_lcd_lt8912b_deinit();
         esp_lcd_del_dsi_bus(dsi_bus);
         return NULL;
     }
+    ESP_LOGI(TAG, "HDMI: step 4 OK");
 
-    /* 5. Enable the panel */
+    /* 5. Clear framebuffers to black BEFORE enabling the panel, so the DPI
+     *    DMA never reads uninitialised PSRAM content and the screen starts black.
+     *    The IDF allocates the framebuffers with calloc (heap_caps_calloc) so they
+     *    start as zero in the cache, but the DMA reads physical PSRAM which may
+     *    still contain stale data.  Flush cache → PSRAM before panel enable. */
+    ESP_LOGI(TAG, "HDMI: step 5 — clear framebuffers + panel enable");
+    {
+        void *fb0 = NULL, *fb1 = NULL;
+        if (esp_lcd_dpi_panel_get_frame_buffer(panel, 2, &fb0, &fb1) == ESP_OK) {
+            size_t fb_size = 640 * 480 * 3;   /* RGB888 */
+            if (fb0) {
+                memset(fb0, 0, fb_size);
+                esp_cache_msync(fb0, fb_size,
+                    ESP_CACHE_MSYNC_FLAG_DIR_C2M |
+                    ESP_CACHE_MSYNC_FLAG_TYPE_DATA |
+                    ESP_CACHE_MSYNC_FLAG_UNALIGNED);
+            }
+            if (fb1) {
+                memset(fb1, 0, fb_size);
+                esp_cache_msync(fb1, fb_size,
+                    ESP_CACHE_MSYNC_FLAG_DIR_C2M |
+                    ESP_CACHE_MSYNC_FLAG_TYPE_DATA |
+                    ESP_CACHE_MSYNC_FLAG_UNALIGNED);
+            }
+        }
+    }
     esp_lcd_panel_init(panel);
     esp_lcd_panel_disp_on_off(panel, true);
+    ESP_LOGI(TAG, "HDMI: step 5 OK");
 
     ESP_LOGI(TAG, "HDMI: 640x480@60Hz ready%s",
              esp_lcd_lt8912b_is_connected() ? " (cable connected)" : " (no cable)");
@@ -242,6 +336,10 @@ static void mos_main_task(void *arg)
     /* 1. Console */
     mos_hal_console_init();
 
+    /* Brief delay so USB-JTAG CDC has time to connect before any potential
+     * crash — otherwise the panic backtrace is lost before it can be sent. */
+    vTaskDelay(pdMS_TO_TICKS(2000));
+
     /* 1b. HDMI output (Olimex ESP32-P4-PC only) — independent of VDP/network.
      *     Initializes DSI bus + LT8912B registers for 640x480@60Hz output.
      *     Returns the DPI panel handle (double-buffered) for mos_vdp_internal.
@@ -256,16 +354,28 @@ static void mos_main_task(void *arg)
      *      Must come after hdmi_init() since it uses the DPI panel handle.
      *      Non-fatal: if init fails, system continues (TCP VDP still works). */
 #ifdef CONFIG_MOS_VDP_INTERNAL_ENABLED
-    if (mos_vdp_internal_init(dpi_panel) != ESP_OK) {
-        ESP_LOGW(TAG, "Internal VDP init failed — continuing without HDMI output");
+    {
+        esp_err_t vdp_ret = mos_vdp_internal_init(dpi_panel);
+        if (vdp_ret != ESP_OK) {
+            ESP_LOGE(TAG, "Internal VDP init failed (0x%x %s) — no HDMI output",
+                     vdp_ret, esp_err_to_name(vdp_ret));
+        } else {
+            ESP_LOGI(TAG, "Internal VDP init OK — s_initialized should be true");
+        }
     }
 #endif
 
-    /* 1c. Audio codec (Olimex ESP32-P4-PC only) — ES8311 I2S+I2C, 16384 Hz mono.
-     *     Powers on codec (GPIO6 active LOW), starts I2S0 APLL, configures ES8311.
-     *     Non-fatal: if audio init fails, rest of the system continues normally. */
+    /* 1c. Audio codec (ES8311).
+     *     When LT8912B is enabled, both chips share the same I2C bus.
+     *     The bus was created once in hdmi_init() and stored in s_shared_i2c_bus.
+     *     We add the ES8311 device to that same bus handle — no new bus needed,
+     *     no FSM state conflict. */
 #ifdef CONFIG_MOS_AUDIO_ENABLED
+#  ifdef CONFIG_LT8912B_ENABLED
+    if (mos_audio_init_with_bus(s_shared_i2c_bus) != ESP_OK) {
+#  else
     if (mos_audio_init() != ESP_OK) {
+#  endif
         ESP_LOGW(TAG, "Audio init failed — continuing without audio");
     }
 #endif
@@ -359,16 +469,32 @@ static void mos_main_task(void *arg)
     mos_shell_init();
 
     /* 9. Session loop - each VDP connection is one session.
-     * vdp_ok is always true here (Ethernet loop above never exits without net).
-     * We wait for a VDP TCP client before starting each shell session. */
+     * With the internal VDP enabled, the router is immediately connected
+     * after mos_vdp_internal_init() — no TCP client is required to start.
+     * With TCP-only mode, we wait for a client as before. */
     while (1) {
+#ifdef CONFIG_MOS_VDP_INTERNAL_ENABLED
+        /* Internal VDP is always ready; TCP client may also connect later. */
+        ESP_LOGI(TAG, "Session loop: tcp=%d internal=%d router=%d",
+                 (int)mos_vdp_connected(),
+                 (int)mos_vdp_internal_connected(),
+                 (int)mos_vdp_router_connected());
+        if (!mos_vdp_router_connected()) {
+            ESP_LOGI(TAG, "Waiting for VDP...");
+            while (!mos_vdp_router_connected()) {
+                vTaskDelay(pdMS_TO_TICKS(100));
+            }
+        }
+        ESP_LOGI(TAG, "VDP ready (internal) - starting shell session");
+#else
         ESP_LOGI(TAG, "Waiting for VDP client on port %d...", MOS_VDP_TCP_PORT);
-        while (!mos_vdp_connected()) {
+        while (!mos_vdp_router_connected()) {
             vTaskDelay(pdMS_TO_TICKS(100));
         }
         /* Give the VDP a moment to finish handshake before sending VDU codes */
         vTaskDelay(pdMS_TO_TICKS(200));
         ESP_LOGI(TAG, "VDP client connected - starting shell session");
+#endif
 
         /* Welcome banner (includes CLS + colour reset) */
         print_banner();
