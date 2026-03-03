@@ -169,25 +169,26 @@ static esp_lcd_panel_handle_t hdmi_init(void)
     ESP_LOGI(TAG, "HDMI: step 3 OK");
 
     /* 4. Create DPI panel — feeds pixel data from ESP32-P4 to LT8912B DSI input.
-     *    640x480 @ 25.175 MHz pixel clock, RGB888 (24-bit).
+     *    800x600 @ 40 MHz pixel clock, RGB888 (24-bit).
+     *    VESA 800x600@60Hz: htotal=1056, vtotal=628, positive sync polarity.
      *    num_fbs=2: double-buffered so mos_vdp_internal can render to back buffer
      *               while the DMA controller reads the front buffer.
      *    disable_lp=1: stay in HS mode during blanking (required for video mode). */
     esp_lcd_panel_handle_t panel = NULL;
     esp_lcd_dpi_panel_config_t dpi_cfg = {
         .dpi_clk_src         = MIPI_DSI_DPI_CLK_SRC_DEFAULT,
-        .dpi_clock_freq_mhz  = 25,          /* target 25.175 MHz; actual = lane_bit_rate/8/div */
+        .dpi_clock_freq_mhz  = 40,          /* 40 MHz for 800x600@60Hz */
         .pixel_format        = LCD_COLOR_PIXEL_FORMAT_RGB888,
         .num_fbs             = 2,           /* double-buffered for tear-free rendering */
         .video_timing = {
-            .h_size          = 640,
-            .v_size          = 480,
-            .hsync_pulse_width = 96,
-            .hsync_back_porch  = 40,
-            .hsync_front_porch = 8,
-            .vsync_pulse_width = 2,
-            .vsync_back_porch  = 10,
-            .vsync_front_porch = 33,
+            .h_size          = 800,
+            .v_size          = 600,
+            .hsync_pulse_width = 128,
+            .hsync_back_porch  = 88,
+            .hsync_front_porch = 40,
+            .vsync_pulse_width = 4,
+            .vsync_back_porch  = 23,
+            .vsync_front_porch = 1,
         },
         .flags.disable_lp    = 1,
     };
@@ -209,7 +210,7 @@ static esp_lcd_panel_handle_t hdmi_init(void)
     {
         void *fb0 = NULL, *fb1 = NULL;
         if (esp_lcd_dpi_panel_get_frame_buffer(panel, 2, &fb0, &fb1) == ESP_OK) {
-            size_t fb_size = 640 * 480 * 3;   /* RGB888 */
+            size_t fb_size = 800 * 600 * 3;   /* RGB888 */
             if (fb0) {
                 memset(fb0, 0, fb_size);
                 esp_cache_msync(fb0, fb_size,
@@ -230,7 +231,7 @@ static esp_lcd_panel_handle_t hdmi_init(void)
     esp_lcd_panel_disp_on_off(panel, true);
     ESP_LOGI(TAG, "HDMI: step 5 OK");
 
-    ESP_LOGI(TAG, "HDMI: 640x480@60Hz ready%s",
+    ESP_LOGI(TAG, "HDMI: 800x600@60Hz ready%s",
              esp_lcd_lt8912b_is_connected() ? " (cable connected)" : " (no cable)");
     return panel;
 }
@@ -341,7 +342,7 @@ static void mos_main_task(void *arg)
     vTaskDelay(pdMS_TO_TICKS(2000));
 
     /* 1b. HDMI output (Olimex ESP32-P4-PC only) — independent of VDP/network.
-     *     Initializes DSI bus + LT8912B registers for 640x480@60Hz output.
+     *     Initializes DSI bus + LT8912B registers for 800x600@60Hz output.
      *     Returns the DPI panel handle (double-buffered) for mos_vdp_internal.
      *     Non-fatal: if HDMI init fails, rest of the system continues normally. */
 #ifdef CONFIG_LT8912B_ENABLED

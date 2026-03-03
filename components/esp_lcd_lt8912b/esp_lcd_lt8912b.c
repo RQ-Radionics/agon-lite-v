@@ -157,53 +157,54 @@ static esp_err_t lt8912b_write_mipi_basic(void)
     return ret;
 }
 
-/* Step 3: Video timing — 640×480@60Hz (ADDR_CEC_DSI = 0x49)
+/* Step 3: Video timing — 800×600@60Hz (ADDR_CEC_DSI = 0x49)
  *
- * VESA 640x480@60Hz:
- *   hact=640 htotal=800 hfp=8   hs=96  hbp=40
- *   vact=480 vtotal=525 vfp=33  vs=2   vbp=10
+ * VESA 800x600@60Hz:
+ *   hact=800 htotal=1056 hfp=40  hs=128 hbp=88
+ *   vact=600 vtotal=628  vfp=1   vs=4   vbp=23
+ *   pclk=40.0 MHz, hsync=positive, vsync=positive
  */
 static esp_err_t lt8912b_write_video_timing(void)
 {
     i2c_master_dev_handle_t d = s_lt.dev_cec_dsi;
 
     /* Sync widths */
-    ESP_RETURN_ON_ERROR(lt_write(d, 0x18, 96),            TAG, "vt hs");
-    ESP_RETURN_ON_ERROR(lt_write(d, 0x19, 2),             TAG, "vt vs");
+    ESP_RETURN_ON_ERROR(lt_write(d, 0x18, 128),            TAG, "vt hs");
+    ESP_RETURN_ON_ERROR(lt_write(d, 0x19, 4),              TAG, "vt vs");
 
     /* H active */
-    ESP_RETURN_ON_ERROR(lt_write(d, 0x1C, 640 & 0xFF),   TAG, "vt hact_l");
-    ESP_RETURN_ON_ERROR(lt_write(d, 0x1D, 640 >> 8),     TAG, "vt hact_h");
+    ESP_RETURN_ON_ERROR(lt_write(d, 0x1C, 800 & 0xFF),    TAG, "vt hact_l");
+    ESP_RETURN_ON_ERROR(lt_write(d, 0x1D, 800 >> 8),      TAG, "vt hact_h");
 
     /* FIFO buffer length (fixed at 12) */
-    ESP_RETURN_ON_ERROR(lt_write(d, 0x2F, 0x0C),          TAG, "vt fifo");
+    ESP_RETURN_ON_ERROR(lt_write(d, 0x2F, 0x0C),           TAG, "vt fifo");
 
     /* H total */
-    ESP_RETURN_ON_ERROR(lt_write(d, 0x34, 800 & 0xFF),   TAG, "vt htot_l");
-    ESP_RETURN_ON_ERROR(lt_write(d, 0x35, 800 >> 8),     TAG, "vt htot_h");
+    ESP_RETURN_ON_ERROR(lt_write(d, 0x34, 1056 & 0xFF),   TAG, "vt htot_l");
+    ESP_RETURN_ON_ERROR(lt_write(d, 0x35, 1056 >> 8),     TAG, "vt htot_h");
 
     /* V total */
-    ESP_RETURN_ON_ERROR(lt_write(d, 0x36, 525 & 0xFF),   TAG, "vt vtot_l");
-    ESP_RETURN_ON_ERROR(lt_write(d, 0x37, 525 >> 8),     TAG, "vt vtot_h");
+    ESP_RETURN_ON_ERROR(lt_write(d, 0x36, 628 & 0xFF),    TAG, "vt vtot_l");
+    ESP_RETURN_ON_ERROR(lt_write(d, 0x37, 628 >> 8),      TAG, "vt vtot_h");
 
     /* VBP */
-    ESP_RETURN_ON_ERROR(lt_write(d, 0x38, 10 & 0xFF),    TAG, "vt vbp_l");
-    ESP_RETURN_ON_ERROR(lt_write(d, 0x39, 10 >> 8),      TAG, "vt vbp_h");
+    ESP_RETURN_ON_ERROR(lt_write(d, 0x38, 23 & 0xFF),     TAG, "vt vbp_l");
+    ESP_RETURN_ON_ERROR(lt_write(d, 0x39, 23 >> 8),       TAG, "vt vbp_h");
 
     /* VFP */
-    ESP_RETURN_ON_ERROR(lt_write(d, 0x3A, 33 & 0xFF),    TAG, "vt vfp_l");
-    ESP_RETURN_ON_ERROR(lt_write(d, 0x3B, 33 >> 8),      TAG, "vt vfp_h");
+    ESP_RETURN_ON_ERROR(lt_write(d, 0x3A, 1 & 0xFF),      TAG, "vt vfp_l");
+    ESP_RETURN_ON_ERROR(lt_write(d, 0x3B, 1 >> 8),        TAG, "vt vfp_h");
 
     /* HBP */
-    ESP_RETURN_ON_ERROR(lt_write(d, 0x3C, 40 & 0xFF),    TAG, "vt hbp_l");
-    ESP_RETURN_ON_ERROR(lt_write(d, 0x3D, 40 >> 8),      TAG, "vt hbp_h");
+    ESP_RETURN_ON_ERROR(lt_write(d, 0x3C, 88 & 0xFF),     TAG, "vt hbp_l");
+    ESP_RETURN_ON_ERROR(lt_write(d, 0x3D, 88 >> 8),       TAG, "vt hbp_h");
 
     /* HFP */
-    ESP_RETURN_ON_ERROR(lt_write(d, 0x3E, 8 & 0xFF),     TAG, "vt hfp_l");
-    ESP_RETURN_ON_ERROR(lt_write(d, 0x3F, 8 >> 8),       TAG, "vt hfp_h");
+    ESP_RETURN_ON_ERROR(lt_write(d, 0x3E, 40 & 0xFF),     TAG, "vt hfp_l");
+    ESP_RETURN_ON_ERROR(lt_write(d, 0x3F, 40 >> 8),       TAG, "vt hfp_h");
 
-    /* Sync polarity: 640x480 = both negative → bits[1:0] = 0 (ADDR_MAIN) */
-    ESP_RETURN_ON_ERROR(lt_write(s_lt.dev_main, 0xAB, 0x00), TAG, "vt pol");
+    /* Sync polarity: 800x600 = both positive → bits[1:0] = 0x03 (ADDR_MAIN) */
+    ESP_RETURN_ON_ERROR(lt_write(s_lt.dev_main, 0xAB, 0x03), TAG, "vt pol");
 
     return ESP_OK;
 }
@@ -213,17 +214,17 @@ static esp_err_t lt8912b_write_video_timing(void)
  * Values from upstream Linux kernel lt8912_write_dds_config().
  * The DDS table (0x1F-0x2E, 0x42-0x5C) is board-agnostic; the HDMI
  * TMDS clock is derived from the DSI input clock, not the crystal.
- * The strm_sw_freq_word (0x4E-0x50) encodes pclk/fref*2^20 and may
- * need tuning for non-25MHz crystals, but bring-up should work as-is.
+ * The strm_sw_freq_word (0x4E-0x50) = pclk_mhz * 0x16C16 (Espressif formula).
+ *   800x600@40MHz: 40 * 0x16C16 = 0x38E370 → [7:0]=0x70, [15:8]=0xE3, [23:16]=0x38
  */
 static esp_err_t lt8912b_write_dds_config(void)
 {
     i2c_master_dev_handle_t d = s_lt.dev_cec_dsi;
 
     /* strm_sw_freq_word[23:0] with enable=0x80 in MSB reg */
-    ESP_RETURN_ON_ERROR(lt_write(d, 0x4E, 0xFF), TAG, "dds 4E");
-    ESP_RETURN_ON_ERROR(lt_write(d, 0x4F, 0x56), TAG, "dds 4F");
-    ESP_RETURN_ON_ERROR(lt_write(d, 0x50, 0x69), TAG, "dds 50");
+    ESP_RETURN_ON_ERROR(lt_write(d, 0x4E, 0x70), TAG, "dds 4E");
+    ESP_RETURN_ON_ERROR(lt_write(d, 0x4F, 0xE3), TAG, "dds 4F");
+    ESP_RETURN_ON_ERROR(lt_write(d, 0x50, 0x38), TAG, "dds 50");
     ESP_RETURN_ON_ERROR(lt_write(d, 0x51, 0x80), TAG, "dds 51 arm");
 
     /* Internal timing reference table */
