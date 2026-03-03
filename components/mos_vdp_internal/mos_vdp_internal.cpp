@@ -792,6 +792,20 @@ esp_err_t mos_vdp_internal_init(esp_lcd_panel_handle_t dpi_panel)
         }
     }
 
+    /* Diagnostic: paint fb[0] green and flush via draw_bitmap to verify
+     * the full pipeline (dcache → PSRAM → DPI DMA → LT8912B → HDMI).
+     * Remove once display output is confirmed working. */
+    if (s_fb[0] && s_panel) {
+        uint8_t *p = s_fb[0];
+        for (int i = 0; i < FB_W * FB_H; i++) {
+            *p++ = 0x00;  /* R */
+            *p++ = 0xFF;  /* G */
+            *p++ = 0x00;  /* B */
+        }
+        esp_lcd_panel_draw_bitmap(s_panel, 0, 0, FB_W, FB_H, s_fb[0]);
+        ESP_LOGI(TAG, "Diagnostic: painted fb[0] green via draw_bitmap");
+    }
+
     /* Create queues */
     s_vdu_queue = xQueueCreate(VDU_QUEUE_LEN, sizeof(uint8_t));
     s_key_queue = xQueueCreate(KEY_QUEUE_LEN, sizeof(uint8_t));
