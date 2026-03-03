@@ -341,29 +341,18 @@ static void mos_main_task(void *arg)
      * crash — otherwise the panic backtrace is lost before it can be sent. */
     vTaskDelay(pdMS_TO_TICKS(2000));
 
-    /* 1b. Audio codec (ES8311) — initialised FIRST, before HDMI, with its
-     *     own I2C bus.  This isolates audio init from any bus-sharing side
-     *     effects and lets us confirm the codec works independently.
-     *     TODO: once confirmed working, re-integrate with shared I2C bus. */
-#ifdef CONFIG_MOS_AUDIO_ENABLED
-    if (mos_audio_init() != ESP_OK) {
-        ESP_LOGW(TAG, "Audio init failed — continuing without audio");
-    }
-#endif
-
-    /* 1c. HDMI output (Olimex ESP32-P4-PC only) — independent of VDP/network.
-     *     Initializes DSI bus + LT8912B registers for 800x600@60Hz output.
-     *     Returns the DPI panel handle (double-buffered) for mos_vdp_internal.
-     *     Non-fatal: if HDMI init fails, rest of the system continues normally. */
+    /* 1b. HDMI output (Olimex ESP32-P4-PC only).
+     *     Must come BEFORE audio: hdmi_init() creates the shared I2C bus and
+     *     exercises it with LT8912B transactions, leaving the bus in a known
+     *     good state. The production test does the same — I2C is initialised
+     *     inside pt_display_init() long before audio_loopback_test runs. */
 #ifdef CONFIG_LT8912B_ENABLED
     esp_lcd_panel_handle_t dpi_panel = hdmi_init();
 #else
     esp_lcd_panel_handle_t dpi_panel = NULL;
 #endif
 
-    /* 1c2. Internal VDP — framebuffer renderer over HDMI (Olimex only).
-     *      Must come after hdmi_init() since it uses the DPI panel handle.
-     *      Non-fatal: if init fails, system continues (TCP VDP still works). */
+    /* 1b2. Internal VDP — framebuffer renderer over HDMI (Olimex only). */
 #ifdef CONFIG_MOS_VDP_INTERNAL_ENABLED
     {
         esp_err_t vdp_ret = mos_vdp_internal_init(dpi_panel);
@@ -373,6 +362,18 @@ static void mos_main_task(void *arg)
         } else {
             ESP_LOGI(TAG, "Internal VDP init OK");
         }
+    }
+#endif
+
+    /* 1c. Audio codec (ES8311) — after HDMI so the shared I2C bus is already
+     *     exercised by LT8912B transactions (matches production test order). */
+#ifdef CONFIG_MOS_AUDIO_ENABLED
+#  ifdef CONFIG_LT8912B_ENABLED
+    if (mos_audio_init_with_bus(s_shared_i2c_bus) != ESP_OK) {
+#  else
+    if (mos_audio_init() != ESP_OK) {
+#  endif
+        ESP_LOGW(TAG, "Audio init failed — continuing without audio");
     }
 #endif
 
