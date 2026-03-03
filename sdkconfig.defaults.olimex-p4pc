@@ -7,7 +7,7 @@
 #   USB:   USB-JTAG via USB-C (programming + console)
 #   ETH:   internal RMII MAC + external PHY
 #   SD:    SDMMC slot 0, GPIO 39-44, PWR GPIO 45 (active LOW)
-#   Audio: ES8311 codec, I2C0 GPIO7/8, I2S0 GPIO9-13
+#   Audio: ES8311 codec, I2C1 GPIO7/8, I2S0 GPIO9-13
 
 # Main task stack — BBC BASIC (bbeval/bbexec) recurse deeply on RISC-V ABI.
 # On RISC-V the ABI uses more stack than Xtensa; vfprintf alone can consume
@@ -49,10 +49,11 @@ CONFIG_MOS_ETH_PHY_RST_GPIO=51
 # Wait up to 5 s for link + DHCP; continue without network if cable is unplugged
 CONFIG_MOS_ETH_LINK_TIMEOUT_MS=5000
 
-# ES8311 audio codec (I2S + I2C, 16384 Hz mono)
-# Olimex ESP32-P4-PC: I2C0 SDA=GPIO7 SCL=GPIO8, I2S0 GPIO9-13, PWR=GPIO6, PA=GPIO53
+# ES8311 audio codec (I2S + I2C, 48000 Hz stereo)
+# Olimex ESP32-P4-PC: I2C1 SDA=GPIO7 SCL=GPIO8 (port 1 — same as production test BSP_I2C_NUM=1)
+# I2S0 GPIO9-13, PWR=GPIO6, PA=GPIO53
 CONFIG_MOS_AUDIO_ENABLED=y
-CONFIG_MOS_AUDIO_I2C_PORT=0
+CONFIG_MOS_AUDIO_I2C_PORT=1
 CONFIG_MOS_AUDIO_I2C_SDA_GPIO=7
 CONFIG_MOS_AUDIO_I2C_SCL_GPIO=8
 CONFIG_MOS_AUDIO_PWR_GPIO=6
@@ -66,9 +67,9 @@ CONFIG_MOS_AUDIO_I2S_MCLK_GPIO=13
 CONFIG_MOS_AUDIO_SAMPLE_RATE=16384
 
 # LT8912B HDMI bridge (MIPI DSI → HDMI via I2C configuration)
-# Olimex ESP32-P4-PC: shared I2C0 bus SDA=GPIO7 SCL=GPIO8 (same as ES8311)
+# Olimex ESP32-P4-PC: I2C1 SDA=GPIO7 SCL=GPIO8 (port 1 — shared with ES8311)
 CONFIG_LT8912B_ENABLED=y
-CONFIG_LT8912B_I2C_PORT=0
+CONFIG_LT8912B_I2C_PORT=1
 CONFIG_LT8912B_SDA_GPIO=7
 CONFIG_LT8912B_SCL_GPIO=8
 CONFIG_LT8912B_HPD_GPIO=15
