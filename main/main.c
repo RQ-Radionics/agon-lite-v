@@ -216,12 +216,7 @@ static esp_lcd_panel_handle_t hdmi_init(void)
              * the DPI→LT8912B→HDMI pipeline is working correctly.
              * Remove this once display output is confirmed. */
             if (fb0) {
-                uint8_t *p = (uint8_t *)fb0;
-                for (int i = 0; i < 800 * 600; i++) {
-                    *p++ = 0xFF;  /* R */
-                    *p++ = 0x00;  /* G */
-                    *p++ = 0x00;  /* B */
-                }
+                memset(fb0, 0, fb_size);
                 esp_cache_msync(fb0, fb_size,
                     ESP_CACHE_MSYNC_FLAG_DIR_C2M |
                     ESP_CACHE_MSYNC_FLAG_TYPE_DATA |

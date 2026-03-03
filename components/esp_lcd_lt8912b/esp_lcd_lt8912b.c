@@ -352,11 +352,13 @@ static void lt8912b_hpd_gpio_init(int gpio)
 {
     if (gpio < 0) return;
 
+    /* HPD is active-high: drive pull-up so the pin reads LOW only when
+     * no cable is connected, and HIGH when a monitor asserts HPD. */
     gpio_config_t cfg = {
         .pin_bit_mask = (1ULL << gpio),
         .mode         = GPIO_MODE_INPUT,
-        .pull_up_en   = GPIO_PULLDOWN_DISABLE,
-        .pull_down_en = GPIO_PULLDOWN_ENABLE,
+        .pull_up_en   = GPIO_PULLUP_ENABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
         .intr_type    = GPIO_INTR_DISABLE,
     };
     gpio_config(&cfg);
@@ -401,7 +403,7 @@ static esp_err_t lt8912b_init_common(bool hdmi_mode, int hpd_gpio)
     lt8912b_hpd_gpio_init(s_lt.hpd_gpio);
 
     s_lt.initialized = true;
-    ESP_LOGI(TAG, "LT8912B initialized — 640x480@60Hz %s output",
+    ESP_LOGI(TAG, "LT8912B initialized — 800x600@60Hz %s output",
              hdmi_mode ? "HDMI" : "DVI");
 
     if (esp_lcd_lt8912b_is_connected()) {
