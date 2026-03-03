@@ -1,27 +1,15 @@
 /*
  * mos_audio.c — Audio driver for Agon MOS (Olimex ESP32-P4-PC)
  *
- * Uses the esp_codec_dev abstraction layer with the ES8311 codec driver,
- * mirroring the approach used in the Olimex production test firmware.
- * This avoids direct ES8311 register manipulation and relies on the
- * tested, upstream codec driver for correct init sequencing.
+ * Exact copy of the BSP audio init sequence from the Olimex production test:
+ *   bsp_i2c_init()                  → i2c_new_master_bus (no extras)
+ *   bsp_audio_init(NULL)            → i2s_new_channel + enable at 22050 mono
+ *   bsp_audio_codec_speaker_init()  → es8311_codec_new + esp_codec_dev_open
  *
- * Hardware connections (Olimex ESP32-P4-PC Rev B):
- *   I2C1: SDA=GPIO7, SCL=GPIO8  (400 kHz, shared with LT8912B)
- *   GPIO6: CODEC_PWR_DIS# (active LOW — pull LOW to power on codec)
- *   GPIO53: PA_EN (active HIGH — managed automatically by esp_codec_dev)
- *   I2S0: DOUT=GPIO9, WS=GPIO10, DIN=GPIO11, BCLK=GPIO12, MCLK=GPIO13
- *
- * Sample rate: 48000 Hz stereo 16-bit (matches Olimex production test).
- * The Agon VDP synthesizes audio internally — there is no PCM sample
- * streaming from MOS, so the sample rate is an implementation detail
- * with no compatibility constraints.
+ * If the production test works, this works — no divergence allowed.
  */
 
-#include <stdint.h>
-#include <stdbool.h>
 #include <string.h>
-
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "driver/gpio.h"
@@ -39,114 +27,87 @@
 
 static const char *TAG = "mos_audio";
 
-#define MOS_AUDIO_SAMPLE_RATE   48000
-#define MOS_AUDIO_CHANNELS      2       /* stereo — matches production test */
-#define MOS_AUDIO_BITS          16
+static i2s_chan_handle_t             s_i2s_tx      = NULL;
+static i2s_chan_handle_t             s_i2s_rx      = NULL;
+static const audio_codec_data_if_t *s_i2s_data_if = NULL;
+static esp_codec_dev_handle_t        s_spk_dev     = NULL;
+static i2c_master_bus_handle_t       s_i2c_bus     = NULL;
+static bool                          s_bus_owned   = false;
+static bool                          s_initialized = false;
 
 /* ------------------------------------------------------------------ */
-/* Driver state                                                         */
+/* bsp_audio_init(NULL) — exact copy                                   */
 /* ------------------------------------------------------------------ */
-typedef struct {
-    i2s_chan_handle_t             i2s_tx;
-    i2s_chan_handle_t             i2s_rx;
-    const audio_codec_data_if_t *data_if;
-    esp_codec_dev_handle_t        spk;
-    bool                          initialized;
-    bool                          bus_owned;
-} mos_audio_t;
-
-static mos_audio_t s_audio = { 0 };
-
-/* ------------------------------------------------------------------ */
-/* Internal: I2S + codec init given a ready i2c_master_bus_handle_t    */
-/* ------------------------------------------------------------------ */
-static esp_err_t audio_init_common(i2c_master_bus_handle_t bus)
+static esp_err_t audio_i2s_init(void)
 {
-    /* --- I2S channels ------------------------------------------------ */
     i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(
         CONFIG_MOS_AUDIO_I2S_NUM, I2S_ROLE_MASTER);
     chan_cfg.auto_clear = true;
     ESP_RETURN_ON_ERROR(
-        i2s_new_channel(&chan_cfg, &s_audio.i2s_tx, &s_audio.i2s_rx),
+        i2s_new_channel(&chan_cfg, &s_i2s_tx, &s_i2s_rx),
         TAG, "i2s_new_channel");
 
-    /* BSP uses I2S_STD_CLK_DEFAULT_CONFIG + MONO slot at 22050 as the
-     * init rate; esp_codec_dev_open() will reconfigure to the real rate.
-     * We init at our target rate directly so there is no intermediate
-     * reconfiguration step. */
+    /* BSP_I2S_DUPLEX_MONO_CFG(22050) */
     i2s_std_config_t std_cfg = {
-        .clk_cfg  = I2S_STD_CLK_DEFAULT_CONFIG(MOS_AUDIO_SAMPLE_RATE),
-        .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(
-                        I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO),
+        .clk_cfg  = I2S_STD_CLK_DEFAULT_CONFIG(22050),
+        .slot_cfg = I2S_STD_PHILIP_SLOT_DEFAULT_CONFIG(
+                        I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_MONO),
         .gpio_cfg = {
             .mclk = CONFIG_MOS_AUDIO_I2S_MCLK_GPIO,
             .bclk = CONFIG_MOS_AUDIO_I2S_BCLK_GPIO,
             .ws   = CONFIG_MOS_AUDIO_I2S_WS_GPIO,
             .dout = CONFIG_MOS_AUDIO_I2S_DOUT_GPIO,
             .din  = CONFIG_MOS_AUDIO_I2S_DIN_GPIO,
-            .invert_flags = {
-                .mclk_inv = false,
-                .bclk_inv = false,
-                .ws_inv   = false,
-            },
+            .invert_flags = { false, false, false },
         },
     };
 
     ESP_RETURN_ON_ERROR(
-        i2s_channel_init_std_mode(s_audio.i2s_tx, &std_cfg),
-        TAG, "i2s_init TX");
+        i2s_channel_init_std_mode(s_i2s_tx, &std_cfg), TAG, "i2s_init TX");
     ESP_RETURN_ON_ERROR(
-        i2s_channel_init_std_mode(s_audio.i2s_rx, &std_cfg),
-        TAG, "i2s_init RX");
+        i2s_channel_enable(s_i2s_tx), TAG, "i2s_enable TX");
+    ESP_RETURN_ON_ERROR(
+        i2s_channel_init_std_mode(s_i2s_rx, &std_cfg), TAG, "i2s_init RX");
+    ESP_RETURN_ON_ERROR(
+        i2s_channel_enable(s_i2s_rx), TAG, "i2s_enable RX");
 
-    /* Enable I2S channels NOW — before touching ES8311 over I2C.
-     * This matches the BSP sequence: bsp_audio_init() enables channels
-     * immediately, then bsp_audio_codec_speaker_init() opens the codec.
-     * MCLK must be running before the ES8311 will accept I2C writes.
-     * esp_codec_dev_open() will call i2s_channel_enable() again but the
-     * driver is idempotent for already-enabled channels. */
-    ESP_RETURN_ON_ERROR(
-        i2s_channel_enable(s_audio.i2s_tx), TAG, "i2s_enable TX");
-    ESP_RETURN_ON_ERROR(
-        i2s_channel_enable(s_audio.i2s_rx), TAG, "i2s_enable RX");
-
-    /* --- esp_codec_dev data interface -------------------------------- */
     audio_codec_i2s_cfg_t i2s_cfg = {
         .port      = CONFIG_MOS_AUDIO_I2S_NUM,
-        .tx_handle = s_audio.i2s_tx,
-        .rx_handle = s_audio.i2s_rx,
+        .tx_handle = s_i2s_tx,
+        .rx_handle = s_i2s_rx,
     };
-    s_audio.data_if = audio_codec_new_i2s_data(&i2s_cfg);
-    ESP_RETURN_ON_FALSE(s_audio.data_if, ESP_ERR_NO_MEM,
+    s_i2s_data_if = audio_codec_new_i2s_data(&i2s_cfg);
+    ESP_RETURN_ON_FALSE(s_i2s_data_if, ESP_ERR_NO_MEM,
                         TAG, "audio_codec_new_i2s_data");
+    return ESP_OK;
+}
 
-    /* --- esp_codec_dev control interface (I2C → ES8311) -------------- */
+/* ------------------------------------------------------------------ */
+/* bsp_audio_codec_speaker_init() — exact copy                         */
+/* ------------------------------------------------------------------ */
+static esp_err_t audio_codec_init(i2c_master_bus_handle_t bus)
+{
     const audio_codec_gpio_if_t *gpio_if = audio_codec_new_gpio();
     ESP_RETURN_ON_FALSE(gpio_if, ESP_ERR_NO_MEM, TAG, "audio_codec_new_gpio");
 
-    /* ES8311_CODEC_DEFAULT_ADDR = 0x30 (8-bit format: 7-bit 0x18 << 1).
-     * audio_codec_ctrl_i2c.c shifts right by 1 before calling
-     * i2c_master_bus_add_device, so the 7-bit address on the wire = 0x18. */
     audio_codec_i2c_cfg_t i2c_cfg = {
         .port       = CONFIG_MOS_AUDIO_I2C_PORT,
-        .addr       = ES8311_CODEC_DEFAULT_ADDR,  /* 0x30 = 7-bit 0x18 << 1 */
+        .addr       = ES8311_CODEC_DEFAULT_ADDR,
         .bus_handle = bus,
     };
-    ESP_LOGI(TAG, "Adding ES8311 to I2C bus (addr=0x%02X -> 7-bit=0x%02X, bus=%p)",
-             ES8311_CODEC_DEFAULT_ADDR, ES8311_CODEC_DEFAULT_ADDR >> 1, (void *)bus);
     const audio_codec_ctrl_if_t *i2c_ctrl_if = audio_codec_new_i2c_ctrl(&i2c_cfg);
-    ESP_RETURN_ON_FALSE(i2c_ctrl_if, ESP_ERR_INVALID_STATE, TAG, "audio_codec_new_i2c_ctrl failed — i2c_master_bus_add_device error");
+    ESP_RETURN_ON_FALSE(i2c_ctrl_if, ESP_ERR_NO_MEM,
+                        TAG, "audio_codec_new_i2c_ctrl");
 
-    /* --- ES8311 codec interface --------------------------------------- */
     esp_codec_dev_hw_gain_t gain = {
-        .pa_voltage      = 5.0f,
+        .pa_voltage        = 5.0f,
         .codec_dac_voltage = 3.3f,
     };
     es8311_codec_cfg_t es8311_cfg = {
         .ctrl_if      = i2c_ctrl_if,
         .gpio_if      = gpio_if,
         .codec_mode   = ESP_CODEC_DEV_TYPE_OUT,
-        .pa_pin       = CONFIG_MOS_AUDIO_PA_GPIO,   /* GPIO53, active HIGH */
+        .pa_pin       = CONFIG_MOS_AUDIO_PA_GPIO,
         .pa_reverted  = false,
         .master_mode  = false,
         .use_mclk     = true,
@@ -156,101 +117,27 @@ static esp_err_t audio_init_common(i2c_master_bus_handle_t bus)
         .hw_gain      = gain,
     };
     const audio_codec_if_t *es8311_dev = es8311_codec_new(&es8311_cfg);
-    ESP_RETURN_ON_FALSE(es8311_dev, ESP_ERR_NO_MEM, TAG, "es8311_codec_new");
+    ESP_RETURN_ON_FALSE(es8311_dev, ESP_ERR_NOT_FOUND, TAG, "es8311_codec_new");
 
-    /* --- esp_codec_dev device handle --------------------------------- */
     esp_codec_dev_cfg_t dev_cfg = {
         .dev_type  = ESP_CODEC_DEV_TYPE_IN_OUT,
         .codec_if  = es8311_dev,
-        .data_if   = s_audio.data_if,
+        .data_if   = s_i2s_data_if,
     };
-    s_audio.spk = esp_codec_dev_new(&dev_cfg);
-    ESP_RETURN_ON_FALSE(s_audio.spk, ESP_ERR_NO_MEM, TAG, "esp_codec_dev_new");
+    s_spk_dev = esp_codec_dev_new(&dev_cfg);
+    ESP_RETURN_ON_FALSE(s_spk_dev, ESP_ERR_NO_MEM, TAG, "esp_codec_dev_new");
 
-    /* --- Open at target sample rate ---------------------------------- */
     esp_codec_dev_sample_info_t fs = {
-        .sample_rate     = MOS_AUDIO_SAMPLE_RATE,
-        .channel         = MOS_AUDIO_CHANNELS,
-        .bits_per_sample = MOS_AUDIO_BITS,
+        .sample_rate     = 48000,
+        .channel         = 2,
+        .bits_per_sample = 16,
     };
     ESP_RETURN_ON_ERROR(
-        esp_codec_dev_open(s_audio.spk, &fs),
-        TAG, "esp_codec_dev_open");
-
+        esp_codec_dev_open(s_spk_dev, &fs), TAG, "esp_codec_dev_open");
     ESP_RETURN_ON_ERROR(
-        esp_codec_dev_set_out_vol(s_audio.spk, 70),
-        TAG, "set_out_vol");
+        esp_codec_dev_set_out_vol(s_spk_dev, 70), TAG, "set_out_vol");
 
-    s_audio.initialized = true;
-    ESP_LOGI(TAG, "mos_audio initialized: %d Hz, %dch, %d-bit",
-             MOS_AUDIO_SAMPLE_RATE, MOS_AUDIO_CHANNELS, MOS_AUDIO_BITS);
-    return ESP_OK;
-}
-
-/* ------------------------------------------------------------------ */
-/* I2C bus recovery — 9 SCL pulses to unstick any slave holding SDA   */
-/* low from a previous incomplete transaction (e.g. after warm reset). */
-/* ------------------------------------------------------------------ */
-static void i2c_bus_recover(int scl_gpio, int sda_gpio)
-{
-    gpio_config_t cfg = {
-        .pin_bit_mask     = (1ULL << scl_gpio) | (1ULL << sda_gpio),
-        .mode             = GPIO_MODE_INPUT_OUTPUT_OD,
-        .pull_up_en       = GPIO_PULLUP_ENABLE,
-        .pull_down_en     = GPIO_PULLDOWN_DISABLE,
-        .intr_type        = GPIO_INTR_DISABLE,
-    };
-    gpio_config(&cfg);
-    gpio_set_level(scl_gpio, 1);
-    gpio_set_level(sda_gpio, 1);
-    esp_rom_delay_us(10);
-
-    if (gpio_get_level(sda_gpio)) {
-        ESP_LOGD(TAG, "I2C bus already free");
-        return;
-    }
-
-    ESP_LOGW(TAG, "I2C SDA stuck LOW — sending 9 recovery clocks on SCL=%d SDA=%d",
-             scl_gpio, sda_gpio);
-    for (int i = 0; i < 9; i++) {
-        gpio_set_level(scl_gpio, 0);
-        esp_rom_delay_us(10);
-        gpio_set_level(scl_gpio, 1);
-        esp_rom_delay_us(10);
-        if (gpio_get_level(sda_gpio)) {
-            ESP_LOGI(TAG, "I2C bus freed after %d clocks", i + 1);
-            break;
-        }
-    }
-    /* STOP: SDA low→high while SCL high */
-    gpio_set_level(sda_gpio, 0);
-    esp_rom_delay_us(10);
-    gpio_set_level(scl_gpio, 1);
-    esp_rom_delay_us(10);
-    gpio_set_level(sda_gpio, 1);
-    esp_rom_delay_us(10);
-
-    ESP_LOGI(TAG, "I2C recovery done: SDA=%d", gpio_get_level(sda_gpio));
-}
-
-/* ------------------------------------------------------------------ */
-/* Power-on helper (GPIO6 CODEC_PWR_DIS#, active LOW)                  */
-/* ------------------------------------------------------------------ */
-static esp_err_t codec_power_on(void)
-{
-#if CONFIG_MOS_AUDIO_PWR_GPIO >= 0
-    gpio_config_t pwr_cfg = {
-        .pin_bit_mask = (1ULL << CONFIG_MOS_AUDIO_PWR_GPIO),
-        .mode         = GPIO_MODE_OUTPUT,
-        .pull_up_en   = GPIO_PULLUP_DISABLE,
-        .pull_down_en = GPIO_PULLDOWN_DISABLE,
-        .intr_type    = GPIO_INTR_DISABLE,
-    };
-    ESP_RETURN_ON_ERROR(gpio_config(&pwr_cfg), TAG, "pwr gpio config");
-    gpio_set_level(CONFIG_MOS_AUDIO_PWR_GPIO, 0);   /* active LOW = power ON */
-    vTaskDelay(pdMS_TO_TICKS(50));                  /* ≥20ms per ES8311 datasheet */
-    ESP_LOGI(TAG, "Codec power ON (GPIO%d=LOW)", CONFIG_MOS_AUDIO_PWR_GPIO);
-#endif
+    ESP_LOGI(TAG, "Audio initialized: 48000 Hz stereo 16-bit");
     return ESP_OK;
 }
 
@@ -260,99 +147,123 @@ static esp_err_t codec_power_on(void)
 
 esp_err_t mos_audio_init(void)
 {
-    ESP_RETURN_ON_FALSE(!s_audio.initialized, ESP_ERR_INVALID_STATE,
+    ESP_RETURN_ON_FALSE(!s_initialized, ESP_ERR_INVALID_STATE,
                         TAG, "already initialized");
 
-    ESP_RETURN_ON_ERROR(codec_power_on(), TAG, "codec_power_on");
+#if CONFIG_MOS_AUDIO_PWR_GPIO >= 0
+    /* CODEC_PWR_DIS# (GPIO6, active LOW) — not in BSP but needed on Olimex */
+    gpio_config_t pwr = {
+        .pin_bit_mask = (1ULL << CONFIG_MOS_AUDIO_PWR_GPIO),
+        .mode         = GPIO_MODE_OUTPUT,
+        .pull_up_en   = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type    = GPIO_INTR_DISABLE,
+    };
+    gpio_config(&pwr);
+    gpio_set_level(CONFIG_MOS_AUDIO_PWR_GPIO, 0);
+    ESP_LOGI(TAG, "Codec power ON (GPIO%d=LOW)", CONFIG_MOS_AUDIO_PWR_GPIO);
+#endif
 
-    /* Bus recovery: generate 9 SCL pulses to release any slave that may be
-     * holding SDA low from a previous incomplete transaction (warm reset). */
-    i2c_bus_recover(CONFIG_MOS_AUDIO_I2C_SCL_GPIO, CONFIG_MOS_AUDIO_I2C_SDA_GPIO);
-
-    /* Create I2C bus */
-    i2c_master_bus_handle_t bus = NULL;
-    i2c_master_bus_config_t bus_cfg = {
-        .i2c_port          = CONFIG_MOS_AUDIO_I2C_PORT,
-        .sda_io_num        = CONFIG_MOS_AUDIO_I2C_SDA_GPIO,
-        .scl_io_num        = CONFIG_MOS_AUDIO_I2C_SCL_GPIO,
-        .clk_source        = I2C_CLK_SRC_DEFAULT,
-        .glitch_ignore_cnt = 7,
-        .flags.enable_internal_pullup = true,
+    /* bsp_i2c_init() — exact copy, no glitch_ignore_cnt, no internal pullup */
+    i2c_master_bus_config_t i2c_bus_conf = {
+        .clk_source = I2C_CLK_SRC_DEFAULT,
+        .sda_io_num = CONFIG_MOS_AUDIO_I2C_SDA_GPIO,
+        .scl_io_num = CONFIG_MOS_AUDIO_I2C_SCL_GPIO,
+        .i2c_port   = CONFIG_MOS_AUDIO_I2C_PORT,
     };
     ESP_RETURN_ON_ERROR(
-        i2c_new_master_bus(&bus_cfg, &bus),
+        i2c_new_master_bus(&i2c_bus_conf, &s_i2c_bus),
         TAG, "i2c_new_master_bus");
-    s_audio.bus_owned = true;
+    s_bus_owned = true;
 
-    esp_err_t ret = audio_init_common(bus);
-    if (ret != ESP_OK) {
-        /* esp_codec_dev may have registered a device on the bus even on
-         * failure; we cannot delete the bus until all devices are removed.
-         * Call i2c_master_bus_reset() to force-clear any stuck state, then
-         * delete.  Errors here are non-fatal — log and move on. */
-        i2c_master_bus_reset(bus);
-        i2c_del_master_bus(bus);
-        s_audio.bus_owned = false;
+    esp_err_t ret = audio_i2s_init();
+    if (ret == ESP_OK) ret = audio_codec_init(s_i2c_bus);
+
+    if (ret != ESP_OK && s_bus_owned) {
+        i2c_del_master_bus(s_i2c_bus);
+        s_i2c_bus   = NULL;
+        s_bus_owned = false;
+    } else if (ret == ESP_OK) {
+        s_initialized = true;
     }
     return ret;
 }
 
 esp_err_t mos_audio_init_with_bus(i2c_master_bus_handle_t bus)
 {
-    ESP_RETURN_ON_FALSE(!s_audio.initialized, ESP_ERR_INVALID_STATE,
+    ESP_RETURN_ON_FALSE(!s_initialized, ESP_ERR_INVALID_STATE,
                         TAG, "already initialized");
     ESP_RETURN_ON_FALSE(bus != NULL, ESP_ERR_INVALID_ARG,
                         TAG, "bus handle is NULL");
 
-    ESP_RETURN_ON_ERROR(codec_power_on(), TAG, "codec_power_on");
+#if CONFIG_MOS_AUDIO_PWR_GPIO >= 0
+    gpio_config_t pwr = {
+        .pin_bit_mask = (1ULL << CONFIG_MOS_AUDIO_PWR_GPIO),
+        .mode         = GPIO_MODE_OUTPUT,
+        .pull_up_en   = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type    = GPIO_INTR_DISABLE,
+    };
+    gpio_config(&pwr);
+    gpio_set_level(CONFIG_MOS_AUDIO_PWR_GPIO, 0);
+    ESP_LOGI(TAG, "Codec power ON (GPIO%d=LOW)", CONFIG_MOS_AUDIO_PWR_GPIO);
+#endif
 
-    s_audio.bus_owned = false;  /* caller owns the bus */
-    return audio_init_common(bus);
+    s_i2c_bus   = bus;
+    s_bus_owned = false;
+
+    esp_err_t ret = audio_i2s_init();
+    if (ret == ESP_OK) ret = audio_codec_init(bus);
+    if (ret == ESP_OK) s_initialized = true;
+    return ret;
 }
 
 int mos_audio_write(const int16_t *samples, size_t num_samples, uint32_t timeout_ms)
 {
-    if (!s_audio.initialized || !samples || num_samples == 0) return -1;
-
-    /* esp_codec_dev_write takes byte count, returns ESP_CODEC_DEV_OK (0) on success */
-    int ret = esp_codec_dev_write(s_audio.spk,
+    if (!s_initialized || !samples || num_samples == 0) return -1;
+    int ret = esp_codec_dev_write(s_spk_dev,
                                   (void *)samples,
                                   (int)(num_samples * sizeof(int16_t)));
-    if (ret != ESP_CODEC_DEV_OK) return -1;
-    return (int)num_samples;
+    return (ret == ESP_CODEC_DEV_OK) ? (int)num_samples : -1;
 }
 
 esp_err_t mos_audio_set_volume(int volume)
 {
-    if (!s_audio.initialized) return ESP_ERR_INVALID_STATE;
+    if (!s_initialized) return ESP_ERR_INVALID_STATE;
     if (volume < 0)   volume = 0;
     if (volume > 100) volume = 100;
-    int ret = esp_codec_dev_set_out_vol(s_audio.spk, volume);
-    return (ret == ESP_CODEC_DEV_OK) ? ESP_OK : ESP_FAIL;
+    return (esp_codec_dev_set_out_vol(s_spk_dev, volume) == ESP_CODEC_DEV_OK)
+           ? ESP_OK : ESP_FAIL;
 }
 
 i2s_chan_handle_t mos_audio_get_tx_handle(void)
 {
-    return s_audio.initialized ? s_audio.i2s_tx : NULL;
+    return s_initialized ? s_i2s_tx : NULL;
 }
 
 void mos_audio_deinit(void)
 {
-    if (!s_audio.initialized) return;
+    if (!s_initialized) return;
 
-    /* esp_codec_dev_close disables the I2S channels internally */
-    esp_codec_dev_close(s_audio.spk);
-    esp_codec_dev_delete(s_audio.spk);
-    s_audio.spk = NULL;
+    esp_codec_dev_close(s_spk_dev);
+    esp_codec_dev_delete(s_spk_dev);
+    s_spk_dev = NULL;
 
-    /* Delete channels after codec is closed */
-    i2s_del_channel(s_audio.i2s_tx);
-    i2s_del_channel(s_audio.i2s_rx);
+    i2s_del_channel(s_i2s_tx);
+    i2s_del_channel(s_i2s_rx);
+    s_i2s_tx = s_i2s_rx = NULL;
+    s_i2s_data_if = NULL;
+
+    if (s_bus_owned && s_i2c_bus) {
+        i2c_del_master_bus(s_i2c_bus);
+    }
+    s_i2c_bus   = NULL;
+    s_bus_owned = false;
 
 #if CONFIG_MOS_AUDIO_PWR_GPIO >= 0
-    gpio_set_level(CONFIG_MOS_AUDIO_PWR_GPIO, 1);   /* active HIGH = power OFF */
+    gpio_set_level(CONFIG_MOS_AUDIO_PWR_GPIO, 1);
 #endif
 
-    memset(&s_audio, 0, sizeof(s_audio));
+    s_initialized = false;
     ESP_LOGI(TAG, "mos_audio de-initialized");
 }
