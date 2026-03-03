@@ -211,8 +211,17 @@ static esp_lcd_panel_handle_t hdmi_init(void)
         void *fb0 = NULL, *fb1 = NULL;
         if (esp_lcd_dpi_panel_get_frame_buffer(panel, 2, &fb0, &fb1) == ESP_OK) {
             size_t fb_size = 800 * 600 * 3;   /* RGB888 */
+            /* Paint fb0 red (R=0xFF G=0x00 B=0x00) as a DMA sanity check.
+             * If the screen shows red before the shell paints anything,
+             * the DPI→LT8912B→HDMI pipeline is working correctly.
+             * Remove this once display output is confirmed. */
             if (fb0) {
-                memset(fb0, 0, fb_size);
+                uint8_t *p = (uint8_t *)fb0;
+                for (int i = 0; i < 800 * 600; i++) {
+                    *p++ = 0xFF;  /* R */
+                    *p++ = 0x00;  /* G */
+                    *p++ = 0x00;  /* B */
+                }
                 esp_cache_msync(fb0, fb_size,
                     ESP_CACHE_MSYNC_FLAG_DIR_C2M |
                     ESP_CACHE_MSYNC_FLAG_TYPE_DATA |
