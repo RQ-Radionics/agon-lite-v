@@ -416,12 +416,15 @@ static void usb_lib_task(void *arg)
     xTaskNotifyGive((TaskHandle_t)arg);
 
     ESP_LOGI(TAG, "USB lib task running (core %d)", xPortGetCoreID());
+    int event_count = 0;
     while (s_running) {
         uint32_t event_flags;
-        usb_host_lib_handle_events(portMAX_DELAY, &event_flags);
-        ESP_LOGD(TAG, "USB lib event: 0x%08lx", (unsigned long)event_flags);
+        esp_err_t err = usb_host_lib_handle_events(portMAX_DELAY, &event_flags);
+        event_count++;
+        ESP_LOGI(TAG, "USB lib event[%d]: flags=0x%08lx err=%s",
+                 event_count, (unsigned long)event_flags, esp_err_to_name(err));
         if (event_flags & USB_HOST_LIB_EVENT_FLAGS_NO_CLIENTS) {
-            /* Free all devices so they can be re-enumerated after reconnect */
+            ESP_LOGI(TAG, "USB: no clients — freeing all devices");
             usb_host_device_free_all();
         }
         if (event_flags & USB_HOST_LIB_EVENT_FLAGS_ALL_FREE) {
@@ -504,11 +507,11 @@ esp_err_t mos_kbd_init(mos_kbd_scancode_cb_t cb)
     /* 5. Now release the hub from reset.  The USB host stack is running and
      * ready to enumerate.  The hub needs ~200 ms to complete its power-on
      * sequence and present the downstream keyboard to the host. */
-    vTaskDelay(pdMS_TO_TICKS(10));                     /* ensure hub held reset ≥10 ms */
+    vTaskDelay(pdMS_TO_TICKS(50));                     /* ensure hub held reset ≥50 ms */
     gpio_set_level(CONFIG_MOS_KBD_HUB_RST_GPIO, 1);   /* deassert reset */
-    ESP_LOGI(TAG, "Hub reset: deasserted — USB host stack ready, hub enumerating");
-    /* No extra delay needed here: the USB host stack will handle the hub
-     * enumeration asynchronously via usb_lib_task + HID background task. */
+    ESP_LOGI(TAG, "Hub reset: deasserted — waiting 200ms for hub power-on sequence");
+    vTaskDelay(pdMS_TO_TICKS(200));                    /* FE1.1s needs ~200ms after reset */
+    ESP_LOGI(TAG, "Hub ready — USB host stack enumerating");
 
     ESP_LOGI(TAG, "USB HID keyboard driver started (PHY1 GPIO%d/GPIO%d, HUB_RST# GPIO%d)",
              CONFIG_MOS_KBD_USB_DP_GPIO, CONFIG_MOS_KBD_USB_DM_GPIO,
