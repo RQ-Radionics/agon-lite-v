@@ -15,7 +15,10 @@ idf_component_register(
         mos_net
         mos_sntp
         mos_vdp
+        mos_vdp_router
         esp_lcd_lt8912b
+        esp_hw_support
+        esp_mm
         mos_audio
         mos_kbd
         mos_vdp_internal

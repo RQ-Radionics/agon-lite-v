@@ -11,4 +11,5 @@ idf_component_register(
     PRIV_REQUIRES
         esp_timer
         heap
+        esp_mm
 )

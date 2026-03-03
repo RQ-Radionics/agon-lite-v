@@ -2,7 +2,9 @@
  * mos_hal.c - Hardware Abstraction Layer for ESP32-MOS
  *
  * Console I/O routing:
- *   - If a VDP TCP client is connected: I/O goes through mos_vdp_putch/getch/kbhit.
+ *   - If any VDP backend is connected: I/O goes through mos_vdp_router_*.
+ *     The router selects between TCP VDP (mos_vdp) and internal VDP
+ *     (mos_vdp_internal) depending on compile-time config and runtime state.
  *   - Otherwise: I/O goes through the IDF-configured console (UART0 or USB-JTAG CDC),
  *     using libc stdio so the same code works on all boards without #ifdefs.
  *
@@ -19,7 +21,7 @@
 #include "driver/uart_vfs.h"
 #include "driver/uart.h"
 #include "mos_hal.h"
-#include "mos_vdp.h"
+#include "mos_vdp_router.h"
 
 static const char *TAG = "mos_hal";
 
@@ -65,8 +67,8 @@ void mos_hal_console_init(void)
 
 void mos_putch(char c)
 {
-    if (mos_vdp_connected()) {
-        mos_vdp_putch((uint8_t)c);
+    if (mos_vdp_router_connected()) {
+        mos_vdp_router_putch((uint8_t)c);
     } else {
         putchar(c);
     }
@@ -74,11 +76,11 @@ void mos_putch(char c)
 
 int mos_getch(void)
 {
-    if (mos_vdp_connected() || mos_vdp_disconnecting()) {
+    if (mos_vdp_router_connected() || mos_vdp_router_disconnecting()) {
         /* Route through VDP even while disconnecting so the shell gets -1
          * promptly rather than falling through to the local console.
-         * mos_vdp_getch() returns -1 immediately when s_disconnecting=true. */
-        return mos_vdp_getch();
+         * mos_vdp_router_getch() returns -1 immediately when disconnecting. */
+        return mos_vdp_router_getch();
     }
     /* Both USB-JTAG and UART go through the IDF VFS — getchar() works for both. */
     return getchar();
@@ -86,8 +88,8 @@ int mos_getch(void)
 
 bool mos_kbhit(void)
 {
-    if (mos_vdp_connected()) {
-        return mos_vdp_kbhit();
+    if (mos_vdp_router_connected()) {
+        return mos_vdp_router_kbhit();
     }
 #if CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG
     /* USB-JTAG: stdin is non-blocking when IDF manages the driver.
@@ -107,8 +109,8 @@ bool mos_kbhit(void)
 void mos_puts(const char *s)
 {
     if (!s) return;
-    if (mos_vdp_connected()) {
-        while (*s) mos_vdp_putch((uint8_t)*s++);
+    if (mos_vdp_router_connected()) {
+        while (*s) mos_vdp_router_putch((uint8_t)*s++);
     } else {
         fputs(s, stdout);
     }
@@ -123,8 +125,8 @@ int mos_printf(const char *fmt, ...)
     va_end(args);
     if (n > 0) {
         int len = (n < MOS_PRINTF_BUF) ? n : MOS_PRINTF_BUF - 1;
-        if (mos_vdp_connected()) {
-            for (int i = 0; i < len; i++) mos_vdp_putch((uint8_t)s_printf_buf[i]);
+        if (mos_vdp_router_connected()) {
+            for (int i = 0; i < len; i++) mos_vdp_router_putch((uint8_t)s_printf_buf[i]);
         } else {
             fwrite(s_printf_buf, 1, len, stdout);
         }

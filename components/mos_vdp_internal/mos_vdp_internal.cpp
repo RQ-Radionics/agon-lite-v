@@ -26,6 +26,7 @@
 #include "esp_log.h"
 #include "esp_lcd_panel_ops.h"
 #include "esp_lcd_mipi_dsi.h"
+#include "esp_cache.h"
 
 #include "vdp_font.h"
 
@@ -708,9 +709,27 @@ esp_err_t mos_vdp_internal_init(esp_lcd_panel_handle_t dpi_panel)
     s_vdu_state = VDU_STATE_NORMAL;
     memset(&s_kbd, 0, sizeof(s_kbd));
 
-    /* Clear both framebuffers to black */
-    if (s_fb[0]) memset(s_fb[0], 0, FB_SIZE);
-    if (s_fb[1]) memset(s_fb[1], 0, FB_SIZE);
+    /* Clear both framebuffers to black.
+     * memset writes through dcache (DBUS alias, 0x3Cxxxxxx).
+     * The DPI DMA reads from physical PSRAM — flush dcache to PSRAM so
+     * the DMA sees zeros immediately, not stale PSRAM content. */
+    /* Flush both framebuffers to physical PSRAM so the DPI DMA sees zeros.
+     * C2M + UNALIGNED: write dirty dcache lines to PSRAM (no INVALIDATE —
+     * combining INVALIDATE with UNALIGNED is rejected by the IDF driver). */
+    if (s_fb[0]) {
+        memset(s_fb[0], 0, FB_SIZE);
+        esp_cache_msync(s_fb[0], FB_SIZE,
+            ESP_CACHE_MSYNC_FLAG_DIR_C2M |
+            ESP_CACHE_MSYNC_FLAG_TYPE_DATA |
+            ESP_CACHE_MSYNC_FLAG_UNALIGNED);
+    }
+    if (s_fb[1]) {
+        memset(s_fb[1], 0, FB_SIZE);
+        esp_cache_msync(s_fb[1], FB_SIZE,
+            ESP_CACHE_MSYNC_FLAG_DIR_C2M |
+            ESP_CACHE_MSYNC_FLAG_TYPE_DATA |
+            ESP_CACHE_MSYNC_FLAG_UNALIGNED);
+    }
 
     /* Create queues */
     s_vdu_queue = xQueueCreate(VDU_QUEUE_LEN, sizeof(uint8_t));
@@ -754,7 +773,9 @@ int mos_vdp_internal_getch(void)
 {
     if (!s_key_queue) return -1;
     uint8_t c = 0;
-    if (xQueueReceive(s_key_queue, &c, portMAX_DELAY) == pdTRUE) {
+    /* Use a short timeout so the caller can periodically re-evaluate routing.
+     * Returns -1 on timeout (no key available yet) — caller should retry. */
+    if (xQueueReceive(s_key_queue, &c, pdMS_TO_TICKS(100)) == pdTRUE) {
         return (int)c;
     }
     return -1;

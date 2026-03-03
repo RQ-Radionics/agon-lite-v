@@ -17,6 +17,7 @@
 #include "mos_api.h"
 #include "mos_hal.h"
 #include "mos_vdp.h"
+#include "mos_vdp_router.h"
 #include "mos_fs.h"
 #include "mos_file.h"
 #include "mos_sysvars.h"
@@ -521,7 +522,7 @@ void mos_api_table_init(void)
 
     t->setvariable = mos_api_setvariable;
     t->getvariable = mos_api_getvariable;
-    t->sysvars     = mos_vdp_get_sysvars;
+    t->sysvars     = mos_vdp_router_get_sysvars;
 
     t->oscli      = mos_api_oscli;
 
@@ -550,8 +551,8 @@ void mos_api_table_init(void)
     t->ugetc    = mos_ugetc;
     t->uputc    = mos_uputc;
 
-    t->vdp_sync         = mos_vdp_sync;
-    t->vdp_request_mode = mos_vdp_request_mode;
+    t->vdp_sync         = mos_vdp_router_sync;
+    t->vdp_request_mode = mos_vdp_router_request_mode;
 
     t->exit         = NULL;  /* registered later via mos_api_set_exit_fn() */
 
