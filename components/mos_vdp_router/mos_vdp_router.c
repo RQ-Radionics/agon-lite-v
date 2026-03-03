@@ -17,6 +17,7 @@
  * forwarded 1:1 to mos_vdp_*.
  */
 
+#include "sdkconfig.h"
 #include "mos_vdp_router.h"
 #include "mos_vdp.h"
 #include "mos_sysvars_block.h"
