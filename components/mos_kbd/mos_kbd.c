@@ -415,11 +415,14 @@ static void usb_lib_task(void *arg)
     /* Signal that USB lib task is ready */
     xTaskNotifyGive((TaskHandle_t)arg);
 
+    ESP_LOGI(TAG, "USB lib task running (core %d)", xPortGetCoreID());
     while (s_running) {
         uint32_t event_flags;
         usb_host_lib_handle_events(portMAX_DELAY, &event_flags);
+        ESP_LOGD(TAG, "USB lib event: 0x%08lx", (unsigned long)event_flags);
         if (event_flags & USB_HOST_LIB_EVENT_FLAGS_NO_CLIENTS) {
-            ESP_LOGI(TAG, "USB: no clients");
+            /* Free all devices so they can be re-enumerated after reconnect */
+            usb_host_device_free_all();
         }
         if (event_flags & USB_HOST_LIB_EVENT_FLAGS_ALL_FREE) {
             ESP_LOGI(TAG, "USB: all devices free");
@@ -443,7 +446,10 @@ esp_err_t mos_kbd_init(mos_kbd_scancode_cb_t cb)
     s_prev_mod = 0;
     memset(s_prev_keys, 0, sizeof(s_prev_keys));
 
-    /* 1. Assert hub reset (LOW) briefly then deassert (HIGH) */
+    /* 1. Assert hub reset (LOW) and hold while the USB host stack initialises.
+     * FE1.1s requires reset asserted for ≥1 ms.  We keep it asserted until
+     * the host stack is running so the hub only enumerates once the HCD is
+     * ready to handle the enumeration traffic. */
     gpio_config_t io_conf = {
         .pin_bit_mask = (1ULL << CONFIG_MOS_KBD_HUB_RST_GPIO),
         .mode         = GPIO_MODE_OUTPUT,
@@ -452,12 +458,12 @@ esp_err_t mos_kbd_init(mos_kbd_scancode_cb_t cb)
         .intr_type    = GPIO_INTR_DISABLE,
     };
     gpio_config(&io_conf);
+    ESP_LOGI(TAG, "Hub reset: asserting GPIO%d LOW", CONFIG_MOS_KBD_HUB_RST_GPIO);
     gpio_set_level(CONFIG_MOS_KBD_HUB_RST_GPIO, 0);   /* assert reset */
-    vTaskDelay(pdMS_TO_TICKS(10));
-    gpio_set_level(CONFIG_MOS_KBD_HUB_RST_GPIO, 1);   /* deassert reset */
-    vTaskDelay(pdMS_TO_TICKS(100));                    /* hub enumerate */
 
-    /* 2. Install USB host library on PHY1 (peripheral_map = BIT1 → OTG11 FS) */
+    /* 2. Install USB host library on PHY1 (peripheral_map = BIT1 → OTG11 FS)
+     * GPIO27 = D+, GPIO26 = D- (hardwired internal FSLS PHY for OTG11).
+     * Priority 10 matches Espressif reference BSP. */
     const usb_host_config_t host_config = {
         .skip_phy_setup  = false,
         .peripheral_map  = BIT(1),    /* PHY1 = OTG11, GPIO26/27 */
@@ -466,12 +472,14 @@ esp_err_t mos_kbd_init(mos_kbd_scancode_cb_t cb)
     esp_err_t ret = usb_host_install(&host_config);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "USB host install failed: %s", esp_err_to_name(ret));
+        gpio_set_level(CONFIG_MOS_KBD_HUB_RST_GPIO, 1); /* release hub */
         return ret;
     }
 
-    /* 3. Start USB lib task on core 0, wait for it to be ready */
+    /* 3. Start USB lib task on core 0, wait for it to be ready.
+     * Priority 10: matches Espressif reference BSP (usb_lib_task prio=10). */
     xTaskCreatePinnedToCore(usb_lib_task, "usb_lib", 4096,
-                            xTaskGetCurrentTaskHandle(), 5,
+                            xTaskGetCurrentTaskHandle(), 10,
                             &s_usb_lib_task, 0);
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 
@@ -488,17 +496,23 @@ esp_err_t mos_kbd_init(mos_kbd_scancode_cb_t cb)
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "HID host install failed: %s", esp_err_to_name(ret));
         s_running = false;
+        gpio_set_level(CONFIG_MOS_KBD_HUB_RST_GPIO, 1); /* release hub */
         /* usb_lib_task will call usb_host_uninstall and exit */
         return ret;
     }
 
+    /* 5. Now release the hub from reset.  The USB host stack is running and
+     * ready to enumerate.  The hub needs ~200 ms to complete its power-on
+     * sequence and present the downstream keyboard to the host. */
+    vTaskDelay(pdMS_TO_TICKS(10));                     /* ensure hub held reset ≥10 ms */
+    gpio_set_level(CONFIG_MOS_KBD_HUB_RST_GPIO, 1);   /* deassert reset */
+    ESP_LOGI(TAG, "Hub reset: deasserted — USB host stack ready, hub enumerating");
+    /* No extra delay needed here: the USB host stack will handle the hub
+     * enumeration asynchronously via usb_lib_task + HID background task. */
+
     ESP_LOGI(TAG, "USB HID keyboard driver started (PHY1 GPIO%d/GPIO%d, HUB_RST# GPIO%d)",
              CONFIG_MOS_KBD_USB_DP_GPIO, CONFIG_MOS_KBD_USB_DM_GPIO,
              CONFIG_MOS_KBD_HUB_RST_GPIO);
-
-    /* Device connections/disconnections are now handled directly in
-     * hid_host_device_callback() which runs in the HID background task.
-     * No additional polling loop is needed. */
 
     return ESP_OK;
 }
