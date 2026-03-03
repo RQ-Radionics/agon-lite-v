@@ -1,4 +1,7 @@
 dependencies:
+  # Audio codec abstraction layer — used by mos_audio (ES8311 on Olimex ESP32-P4-PC)
+  espressif/esp_codec_dev: "^1.5.4"
+
   # USB HID host (keyboard/mouse via USB hub FE1.1s on GPIO26/27)
   # Used by mos_kbd component (Olimex ESP32-P4-PC only)
   espressif/usb_host_hid:
