@@ -842,6 +842,13 @@ static void do_plot(uint8_t cmd, int16_t x_raw, int16_t y_raw)
 
     uint8_t op = cmd & 0xF8;  /* upper 5 bits, mask low 3 */
 
+    /* colour_mode 0 = move only (e.g. PLOT 4, PLOT 0x80) — update position
+     * but don't draw anything.  Matches console8 behaviour. */
+    if (colour_mode == 0) {
+        fb_flush();
+        return;
+    }
+
     switch (op) {
     case 0x00:  /* Line — all points */
     case 0x08:
