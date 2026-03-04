@@ -10,8 +10,10 @@ rm -f sdkconfig
 rm -rf build
 
 export SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.waveshare-p4wifi"
-idf.py set-target esp32p4
-idf.py build
+idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.waveshare-p4wifi" set-target esp32p4
+# Wipe again: set-target wrote Kconfig defaults; we want our overrides to win.
+rm -f sdkconfig
+idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.waveshare-p4wifi" build
 
 echo ""
 echo "=== SDK user programs (RISC-V) ==="
