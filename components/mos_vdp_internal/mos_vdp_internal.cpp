@@ -2226,13 +2226,5 @@ bool mos_vdp_internal_connected(void)
 
 void mos_vdp_internal_flush(void)
 {
-    /* Wait until the VDU queue is drained — i.e. vdp_render_task has
-     * processed all pending bytes and called fb_flush() for each one.
-     * Needed before returning from mos_loader_exec() or any shell command
-     * that wants output to appear before the next command runs. */
-    if (!s_vdu_queue) return;
-    while (uxQueueMessagesWaiting(s_vdu_queue) > 0)
-        vTaskDelay(pdMS_TO_TICKS(5));
-    /* One extra tick to let the render task finish processing the last byte */
-    vTaskDelay(pdMS_TO_TICKS(5));
+    /* No-op: rendering is driven by the render task */
 }

@@ -34,7 +34,6 @@
 #include "mos_api.h"
 #include "mos_api_table.h"
 #include "mos_vdp.h"
-#include "mos_vdp_router.h"
 
 static const char *TAG = "mos_loader";
 
@@ -250,11 +249,7 @@ int mos_loader_exec(const char *path, int argc, char **argv)
     /* 5. Launch user program in a dedicated FreeRTOS task with a large stack
      * allocated from PSRAM.  This avoids overflowing app_main's stack when
      * running deep-recursing interpreters (e.g. BBC BASIC bbeval/bbexec).
-     * app_main blocks on a semaphore until the user program returns.
-     *
-     * On ESP32-P4: flash_io_task was started once at boot in mos_main_task
-     * and runs for the entire session — no need to start/stop it here. */
-
+     * app_main blocks on a semaphore until the user program returns. */
     void *ibus_entry = dbus_to_ibus(s_exec_arena);
     mos_entry_t entry_fn = (mos_entry_t)ibus_entry;
     ESP_LOGI(TAG, "Running '%s'", resolved);
@@ -273,8 +268,7 @@ int mos_loader_exec(const char *path, int argc, char **argv)
     }
 
     /* Stack allocation: see USER_TASK_STACK_CAPS above for rationale.
-     * On ESP32-P4 this is PSRAM (independent bus from flash, but IDF flash
-     * driver still asserts DRAM stack — use flash_io proxy for all I/O).
+     * On ESP32-P4 this is PSRAM (independent bus from flash, safe).
      * On ESP32-S3 this is internal DRAM (shared bus, must avoid PSRAM).
      *
      * xTaskCreateWithCaps allocates TCB + stack internally using the given
@@ -313,12 +307,6 @@ int mos_loader_exec(const char *path, int argc, char **argv)
     }
     vSemaphoreDelete(args.done);
     vTaskDeleteWithCaps(task);
-
-    /* Drain the VDP render queue before returning — the user program may have
-     * queued VDU bytes via mos->putch() that vdp_render_task hasn't processed
-     * yet. Without this, the display never updates if the program exits quickly
-     * (e.g. bootlogo) or if the caller immediately launches another program. */
-    mos_vdp_router_flush();
 
     int ret = args.retval;
     ESP_LOGI(TAG, "'%s' exited %d", resolved, ret);

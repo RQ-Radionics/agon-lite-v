@@ -115,9 +115,10 @@ void mos_vdp_router_flush(void)
 
 void mos_vdp_router_sync(void)
 {
-    if (use_internal())
-        mos_vdp_internal_flush();   /* drain VDU queue before continuing */
-    else
+    /* Internal VDP: rendering is handled by the render task asynchronously.
+     * A true sync would need a semaphore; for now this is a no-op because
+     * the render task drains the queue faster than any MOS shell output. */
+    if (!use_internal())
         mos_vdp_sync();
 }
 

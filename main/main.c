@@ -342,15 +342,6 @@ static void mos_main_task(void *arg)
     /* 1. Console */
     mos_hal_console_init();
 
-    /* 1a. Flash I/O proxy task (ESP32-P4 only).
-     *     mos_main_task runs with a PSRAM stack. The IDF flash driver asserts
-     *     that the calling task's stack is in internal DRAM before accessing
-     *     SPI flash. All FAT/VFS calls from this task (and from user programs)
-     *     must go through flash_io_task which has an 8KB internal-DRAM stack.
-     *     Start it once here so it is available for the shell, autoexec, and
-     *     all user programs. It runs for the lifetime of the session. */
-    mos_flash_io_start();
-
     /* Brief delay so USB-JTAG CDC has time to connect before any potential
      * crash — otherwise the panic backtrace is lost before it can be sent. */
     vTaskDelay(pdMS_TO_TICKS(2000));
