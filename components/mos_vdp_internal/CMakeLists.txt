@@ -13,3 +13,6 @@ idf_component_register(
         heap
         esp_mm
 )
+
+# Link libm for sqrtf() used in PLOT circle/arc engine
+target_link_libraries(${COMPONENT_LIB} PRIVATE m)

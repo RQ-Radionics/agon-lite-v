@@ -112,6 +112,19 @@ bool mos_vdp_internal_connected(void);
  */
 void mos_vdp_internal_flush(void);
 
+/*
+ * mos_vdp_internal_set_response_cb — register back-channel callback.
+ *
+ * The VDP uses this callback to send response packets back to MOS
+ * (cursor position, mode info, pixel reads, etc.) as required by the
+ * Agon VDU 23,0 sub-protocol.
+ *
+ * @param cb  Function called with one byte at a time. May be called
+ *            from the render task (core 1). Must be thread-safe.
+ *            Pass NULL to disable back-channel responses.
+ */
+void mos_vdp_internal_set_response_cb(void (*cb)(uint8_t));
+
 #ifdef __cplusplus
 }
 #endif
