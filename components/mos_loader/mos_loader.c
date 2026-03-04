@@ -34,6 +34,7 @@
 #include "mos_api.h"
 #include "mos_api_table.h"
 #include "mos_vdp.h"
+#include "mos_vdp_router.h"
 
 static const char *TAG = "mos_loader";
 
@@ -312,6 +313,12 @@ int mos_loader_exec(const char *path, int argc, char **argv)
     }
     vSemaphoreDelete(args.done);
     vTaskDeleteWithCaps(task);
+
+    /* Drain the VDP render queue before returning — the user program may have
+     * queued VDU bytes via mos->putch() that vdp_render_task hasn't processed
+     * yet. Without this, the display never updates if the program exits quickly
+     * (e.g. bootlogo) or if the caller immediately launches another program. */
+    mos_vdp_router_flush();
 
     int ret = args.retval;
     ESP_LOGI(TAG, "'%s' exited %d", resolved, ret);
