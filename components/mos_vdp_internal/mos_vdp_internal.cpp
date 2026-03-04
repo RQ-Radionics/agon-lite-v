@@ -77,6 +77,26 @@ static int s_scale = 1;
 static int s_off_x = 0;
 static int s_off_y = 0;
 
+/* Agon logical coordinate space: always 1280 × 1024 OS units,
+ * matching BBC Micro / console8 VDP convention.
+ * logicalScaleX = 1280 / mode_w  (e.g. 2.0 for 640-wide modes)
+ * logicalScaleY = 1024 / mode_h  (e.g. ~2.133 for 480-high modes)
+ * Coords arriving in VDU 25 / VDU 24 / VDU 29 are in these OS units. */
+#define LOGICAL_SCRW 1280
+#define LOGICAL_SCRH 1024
+static float s_logical_scale_x = 2.0f;
+static float s_logical_scale_y = 2.0f;
+
+/* Convert an Agon OS-unit coordinate to a screen pixel coordinate */
+static inline int agon_os_to_px_x(int16_t os_x)
+{
+    return (int)((float)os_x / s_logical_scale_x);
+}
+static inline int agon_os_to_px_y(int16_t os_y)
+{
+    return (int)((float)os_y / s_logical_scale_y);
+}
+
 static void scale_update(void)
 {
     /* Integer scale: largest factor where both dimensions fit inside the FB.
@@ -88,6 +108,9 @@ static void scale_update(void)
     /* Centre the scaled image; unoccupied border pixels are black. */
     s_off_x = (FB_W - s_mode_w * s_scale) / 2;
     s_off_y = (FB_H - s_mode_h * s_scale) / 2;
+    /* Logical OS-unit scale factors (1280×1024 logical space → mode pixels) */
+    s_logical_scale_x = (float)LOGICAL_SCRW / (float)s_mode_w;
+    s_logical_scale_y = (float)LOGICAL_SCRH / (float)s_mode_h;
 }
 
 /* ------------------------------------------------------------------ */
@@ -772,23 +795,29 @@ static void copy_rect(int x0, int y0, int x1, int y1, int dest_x, int dest_y)
  * cmd: the PLOT command byte (operation | mode bits)
  * x, y: new graphics position (Agon logical, signed)
  * Note: command byte bits:
- *   [7:3] = operation, [2] = 0→fg/1→bg or invert, [1] = 0→abs/1→rel, [0] = 0→omit last/1→draw all */
+ *   [7:3] = operation, [2] = 0→relative/1→absolute, [1:0] = draw mode (0=move,1=fg,2=inv,3=bg) */
 static void do_plot(uint8_t cmd, int16_t x_raw, int16_t y_raw)
 {
-    /* VDU coords are in 1/4-pixel units (Agon standard).
-     * Convert to pixel coords here; all internal state stays in pixels. */
-    int x_px = (int)x_raw >> 2;
-    int y_px = (int)y_raw >> 2;
+    /* VDU coords are in Agon OS units (1280×1024 logical space).
+     * Convert to mode pixels using the logical scale factors. */
+    int x_px = agon_os_to_px_x(x_raw);
+    int y_px = agon_os_to_px_y(y_raw);
 
-    /* Determine absolute coordinates */
+
+    /* Determine absolute coordinates.
+     * BBC Micro PLOT command bits [2:0]:
+     *   bit 2 = 0 → relative (add to last position)
+     *   bit 2 = 1 → absolute (from graphics origin)
+     * PLOT 69 (0x45): bit2 = 1 → absolute */
     int abs_x, abs_y;
     if (cmd & 0x04) {
-        /* relative move */
-        abs_x = s_gfx_x + x_px;
-        abs_y = s_gfx_y + y_px;
-    } else {
+        /* absolute */
         abs_x = x_px + s_gfx_origin_x;
         abs_y = y_px + s_gfx_origin_y;
+    } else {
+        /* relative */
+        abs_x = s_gfx_x + x_px;
+        abs_y = s_gfx_y + y_px;
     }
 
     /* Save previous position */
@@ -796,12 +825,19 @@ static void do_plot(uint8_t cmd, int16_t x_raw, int16_t y_raw)
     s_gfx_x_prev = prev_x; s_gfx_y_prev = prev_y;
     s_gfx_x = abs_x; s_gfx_y = abs_y;
 
-    /* Determine colour */
+    /* Determine colour from the bottom 2 bits of the command byte.
+     * Agon/BBC Micro spec: colourMode = cmd & 0x03
+     *   0 → move only (no draw)
+     *   1 → foreground colour
+     *   2 → logical inverse (XOR)
+     *   3 → background colour
+     * PLOT 69 (0x45): 0x45 & 0x03 = 1 → foreground */
     rgb888_t c;
-    if (cmd & 0x40) {
+    int colour_mode = cmd & 0x03;
+    if (colour_mode == 3) {
         c = s_palette[s_gfx_bg & 0xF];  /* background colour */
     } else {
-        c = s_palette[s_gfx_fg & 0xF];  /* foreground colour */
+        c = s_palette[s_gfx_fg & 0xF];  /* foreground colour (modes 1 and 2) */
     }
 
     uint8_t op = cmd & 0xF8;  /* upper 5 bits, mask low 3 */
@@ -1951,11 +1987,15 @@ static void vdu_process(uint8_t c)
     case VDU_STATE_VDU24_6: s_arg[5] = c; s_vdu_state = VDU_STATE_VDU24_7; break;
     case VDU_STATE_VDU24_7: s_arg[6] = c; s_vdu_state = VDU_STATE_VDU24_8; break;
     case VDU_STATE_VDU24_8: {
-        /* VDU 24 coords are in 1/4-pixel VDU units — convert to pixels */
-        int16_t x0 = (int16_t)(s_arg[0] | (s_arg[1] << 8)) >> 2;
-        int16_t y0 = (int16_t)(s_arg[2] | (s_arg[3] << 8)) >> 2;
-        int16_t x1 = (int16_t)(s_arg[4] | (s_arg[5] << 8)) >> 2;
-        int16_t y1 = (int16_t)(s_arg[6] | (c << 8)) >> 2;
+        /* VDU 24 coords are in Agon OS units (1280×1024) — convert to pixels */
+        int16_t rx0 = (int16_t)(s_arg[0] | (s_arg[1] << 8));
+        int16_t ry0 = (int16_t)(s_arg[2] | (s_arg[3] << 8));
+        int16_t rx1 = (int16_t)(s_arg[4] | (s_arg[5] << 8));
+        int16_t ry1 = (int16_t)(s_arg[6] | (c << 8));
+        int16_t x0 = (int16_t)agon_os_to_px_x(rx0);
+        int16_t y0 = (int16_t)agon_os_to_px_y(ry0);
+        int16_t x1 = (int16_t)agon_os_to_px_x(rx1);
+        int16_t y1 = (int16_t)agon_os_to_px_y(ry1);
         /* Agon coords: x0,y0 = bottom-left, x1,y1 = top-right (pixels)
          * Convert to screen space (y flipped) */
         int sx0 = (int)x0, sx1 = (int)x1;
@@ -2012,9 +2052,9 @@ static void vdu_process(uint8_t c)
     case VDU_STATE_VDU29_2: s_arg[1] = c; s_vdu_state = VDU_STATE_VDU29_3; break;
     case VDU_STATE_VDU29_3: s_arg[2] = c; s_vdu_state = VDU_STATE_VDU29_4; break;
     case VDU_STATE_VDU29_4:
-        /* VDU 29 coords are in 1/4-pixel VDU units — convert to pixels */
-        s_gfx_origin_x = (int)(int16_t)(s_arg[0] | (s_arg[1] << 8)) >> 2;
-        s_gfx_origin_y = (int)(int16_t)(s_arg[2] | (c << 8)) >> 2;
+        /* VDU 29 coords are in Agon OS units (1280×1024) — convert to pixels */
+        s_gfx_origin_x = agon_os_to_px_x((int16_t)(s_arg[0] | (s_arg[1] << 8)));
+        s_gfx_origin_y = agon_os_to_px_y((int16_t)(s_arg[2] | (c << 8)));
         s_vdu_state = VDU_STATE_NORMAL;
         break;
 
