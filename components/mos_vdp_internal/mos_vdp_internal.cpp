@@ -441,9 +441,17 @@ static inline void fb_flush(void)
 
 static void fb_flush_now(void)
 {
-    if (!s_panel || !s_fb[0]) return;
+    if (!s_fb[0]) return;
     s_fb_dirty = false;
-    esp_lcd_panel_draw_bitmap(s_panel, 0, 0, FB_W, FB_H, s_fb[0]);
+    /* The DPI controller streams s_fb[0] to the display via DW-GDMA
+     * continuously.  We must NOT call draw_bitmap: on P4 it invokes
+     * on_color_trans_done which reprograms the DMA channel, racing with
+     * the running ISR and corrupting chan->group (Load access fault).
+     *
+     * FB_SIZE = 800×600×3 = 2,359,296 bytes, a multiple of the 64-byte
+     * L2 cache line — so UNALIGNED is not needed and the sync range is
+     * exactly the framebuffer with no spillover into adjacent DMA structs. */
+    esp_cache_msync(s_fb[0], FB_SIZE, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
 }
 
 /* ------------------------------------------------------------------ */
@@ -692,13 +700,29 @@ static void plot_filled_triangle(int x0, int y0, int x1, int y1, int x2, int y2,
         /* ya == yb (flat bottom/top), xc/yc is apex */
         if (ya == yc) return;
         int steps = abs(yc - ya);
-        for (int i = 0; i <= steps; i++) {
-            int t100 = (steps == 0) ? 0 : i * 100 / steps;
+        /* Clamp iteration range to the visible viewport to avoid iterating
+         * millions of steps for off-screen geometry. */
+        int i0 = 0, i1 = steps;
+        int y_lo = (yc > ya) ? s_gvp_y0 : s_gvp_y0;   /* unused, kept for clarity */
+        (void)y_lo;
+        if (yc > ya) {
+            /* y increases with i: y = ya + i */
+            if (ya + i0 < s_gvp_y0) i0 = s_gvp_y0 - ya;
+            if (ya + i1 > s_gvp_y1) i1 = s_gvp_y1 - ya;
+        } else {
+            /* y decreases with i: y = ya - i */
+            if (ya - i0 > s_gvp_y1) i0 = ya - s_gvp_y1;
+            if (ya - i1 < s_gvp_y0) i1 = ya - s_gvp_y0;
+        }
+        if (i0 > i1) return;  /* entirely off-screen */
+        for (int i = i0; i <= i1; i++) {
+            int y  = ya + (yc > ya ? i : -i);
             int lx = xa + (xc - xa) * i / steps;
             int rx = xb + (xc - xb) * i / steps;
-            (void)t100;
-            int y  = ya + (yc > ya ? i : -i);
             if (lx > rx) { int t = lx; lx = rx; rx = t; }
+            /* Clip X span to viewport */
+            if (lx < s_gvp_x0) lx = s_gvp_x0;
+            if (rx > s_gvp_x1) rx = s_gvp_x1;
             for (int x = lx; x <= rx; x++)
                 fb_plot_pixel(x, y, c, s_gcol_mode);
         }
