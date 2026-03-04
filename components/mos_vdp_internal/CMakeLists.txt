@@ -10,6 +10,7 @@ idf_component_register(
         freertos
         driver
         mos_audio
+        mos_api
     PRIV_REQUIRES
         esp_timer
         heap

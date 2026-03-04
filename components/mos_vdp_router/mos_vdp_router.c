@@ -27,27 +27,13 @@
 #include "freertos/task.h"
 #include "mos_vdp_internal.h"
 
-/* A minimal sysvar block for the internal VDP path.
- * Fields are updated by the keyboard driver (keyascii, keymods, vkeycode,
- * vkeydown, vkeycount) as the internal VDP decodes scancodes.
- * Screen geometry fields (scrWidth, scrHeight, scrCols, scrRows, scrMode)
- * are set once during init and remain constant.
- * All other fields default to 0. */
-static t_mos_sysvars s_internal_sysvars = {
-    .scrWidth   = 640,
-    .scrHeight  = 480,
-    .scrCols    = 80,
-    .scrRows    = 60,
-    .scrMode    = 16,   /* Agon mode 16 = 640×480 */
-    .scrColours = 6,    /* log2(64) = 6 */
-};
-
 t_mos_sysvars *mos_vdp_router_get_sysvars(void)
 {
     /* If a TCP VDP client is connected, use its live sysvar block
      * (it tracks cursor position, pixel reads, audio status, etc.) */
     if (mos_vdp_connected()) return mos_vdp_get_sysvars();
-    return &s_internal_sysvars;
+    /* Internal VDP: return live block updated on every mode change / cursor move */
+    return mos_vdp_internal_get_sysvars();
 }
 
 /* Helper: true if the internal VDP should handle I/O right now

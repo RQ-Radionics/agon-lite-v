@@ -43,6 +43,7 @@
 
 #include "vdp_font.h"
 #include "mos_audio_synth.h"
+#include "mos_sysvars_block.h"
 
 static const char *TAG = "vdp_int";
 
@@ -58,10 +59,16 @@ static const char *TAG = "vdp_int";
 
 static int     s_mode_w      = 640;
 static int     s_mode_h      = 480;
-static uint8_t s_mode_num    = 0;    /* current Agon mode number (0-18) */
+static uint8_t s_mode_num    = 0;    /* current Agon mode number (0-30, +0x80 for double-buf) */
 static uint8_t s_mode_colours = 16; /* number of colours in current mode */
 #define COLS            (s_mode_w / FONT_W)
 #define ROWS            (s_mode_h / FONT_H)
+
+/* Live sysvar block — updated on every mode change and cursor move.
+ * Returned by mos_vdp_internal_get_sysvars(); the router reads this
+ * instead of its own stale static copy. Zero-initialised; fields are
+ * filled in by sysvars_update() before any caller can read them. */
+static t_mos_sysvars s_sysvars = {};
 
 /* ------------------------------------------------------------------ */
 /* Scale + centre state                                                 */
@@ -903,9 +910,24 @@ static void vdp_send_byte(uint8_t b)
     if (s_response_cb) s_response_cb(b);
 }
 
+/* Update the live sysvar block so mos_vdp_internal_get_sysvars() is current */
+static void sysvars_update(void)
+{
+    s_sysvars.scrWidth   = (uint16_t)s_mode_w;
+    s_sysvars.scrHeight  = (uint16_t)s_mode_h;
+    s_sysvars.scrCols    = (uint8_t)COLS;
+    s_sysvars.scrRows    = (uint8_t)ROWS;
+    s_sysvars.scrColours = s_mode_colours;
+    s_sysvars.scrMode    = s_mode_num;
+    /* cursor position in character cells */
+    s_sysvars.cursorX    = (uint8_t)s_col;
+    s_sysvars.cursorY    = (uint8_t)s_row;
+}
+
 /* Send cursor position packet (VDP_CURSOR 0x82) */
 static void send_cursor_pos(void)
 {
+    sysvars_update();
     /* Packet: 0x23, 0x02, col_lo, col_hi, row_lo, row_hi, 0x00, 0x00 */
     vdp_send_byte(0x23);
     vdp_send_byte(0x02);
@@ -919,6 +941,7 @@ static void send_cursor_pos(void)
 /* Send mode information packet (VDP_MODE 0x86) */
 static void send_mode_information(void)
 {
+    sysvars_update();
     /* Packet: 0x23, 0x06, screenW_lo, screenW_hi, screenH_lo, screenH_hi,
      *         cols_lo, cols_hi, rows_lo, rows_hi, colours, mode */
     uint16_t sw = (uint16_t)s_mode_w;
@@ -2261,4 +2284,10 @@ bool mos_vdp_internal_connected(void)
 void mos_vdp_internal_flush(void)
 {
     /* No-op: rendering is driven by the render task */
+}
+
+t_mos_sysvars *mos_vdp_internal_get_sysvars(void)
+{
+    sysvars_update();
+    return &s_sysvars;
 }

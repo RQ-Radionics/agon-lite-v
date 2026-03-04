@@ -47,6 +47,7 @@
 
 #include "esp_err.h"
 #include "esp_lcd_panel_ops.h"
+#include "mos_sysvars_block.h"
 #include <stdint.h>
 #include <stdbool.h>
 
@@ -124,6 +125,15 @@ void mos_vdp_internal_flush(void);
  *            Pass NULL to disable back-channel responses.
  */
 void mos_vdp_internal_set_response_cb(void (*cb)(uint8_t));
+
+/*
+ * mos_vdp_internal_get_sysvars — return a pointer to the live sysvar block.
+ *
+ * The returned block is updated in-place by the VDP render task whenever the
+ * screen mode changes (VDU 22) or a cursor move occurs. The caller must NOT
+ * free the pointer; it remains valid for the lifetime of the VDP.
+ */
+t_mos_sysvars *mos_vdp_internal_get_sysvars(void);
 
 #ifdef __cplusplus
 }
