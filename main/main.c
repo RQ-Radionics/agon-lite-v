@@ -189,7 +189,7 @@ static esp_lcd_panel_handle_t hdmi_init(void)
             .v_size          = 600,
             .hsync_pulse_width = 128,
             .hsync_back_porch  = 88,
-            .hsync_front_porch = 48,
+            .hsync_front_porch = 40,   /* VESA value (NOT BSP 48) — required for sync */
             .vsync_pulse_width = 4,
             .vsync_back_porch  = 23,
             .vsync_front_porch = 1,
@@ -239,7 +239,7 @@ static esp_lcd_panel_handle_t hdmi_init(void)
     esp_lcd_panel_disp_on_off(panel, true);
     ESP_LOGI(TAG, "HDMI: step 5 OK");
 
-    ESP_LOGI(TAG, "HDMI: 1024x768@60Hz ready%s",
+    ESP_LOGI(TAG, "HDMI: 800x600@60Hz ready%s",
              esp_lcd_lt8912b_is_connected() ? " (cable connected)" : " (no cable)");
     return panel;
 }
