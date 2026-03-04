@@ -465,10 +465,10 @@ esp_err_t mos_kbd_init(mos_kbd_scancode_cb_t cb)
     gpio_set_level(CONFIG_MOS_KBD_HUB_RST_GPIO, 0);   /* assert reset */
 
     /* 2. Install USB host library on PHY0 (peripheral_map = 0 → BIT0 → OTG20 HS)
-     * GPIO24 = D-, GPIO25 = D+ (UTMI PHY, same connector as production test). */
+     * Dedicated UTMI pads — same PHY used by production test for HS pen drives. */
     const usb_host_config_t host_config = {
         .skip_phy_setup  = false,
-        .peripheral_map  = 0,         /* PHY0 = OTG20 HS, GPIO24/25 */
+        .peripheral_map  = 0,         /* PHY0 = OTG20 HS (UTMI dedicated pads) */
         .intr_flags      = ESP_INTR_FLAG_LEVEL1,
     };
     esp_err_t ret = usb_host_install(&host_config);
@@ -512,8 +512,7 @@ esp_err_t mos_kbd_init(mos_kbd_scancode_cb_t cb)
     vTaskDelay(pdMS_TO_TICKS(200));                    /* FE1.1s needs ~200ms after reset */
     ESP_LOGI(TAG, "Hub ready — USB host stack enumerating");
 
-    ESP_LOGI(TAG, "USB HID keyboard driver started (PHY1 GPIO%d/GPIO%d, HUB_RST# GPIO%d)",
-             CONFIG_MOS_KBD_USB_DP_GPIO, CONFIG_MOS_KBD_USB_DM_GPIO,
+    ESP_LOGI(TAG, "USB HID keyboard driver started (OTG20 HS UTMI, HUB_RST# GPIO%d)",
              CONFIG_MOS_KBD_HUB_RST_GPIO);
 
     return ESP_OK;

@@ -386,6 +386,8 @@ static void root_port_handle_events(hcd_port_handle_t root_port_hdl)
         if (hcd_port_get_speed(p_hub_driver_obj->constant.root_port_hdl, &speed) != ESP_OK) {
             goto new_dev_err;
         }
+        ESP_LOGI(HUB_DRIVER_TAG, "Root port connected device speed: %d (0=LOW,1=FULL,2=HIGH)",
+                 (int)speed);
 
         if (dev_tree_node_new(NULL, 0, speed) != ESP_OK) {
             ESP_LOGE(HUB_DRIVER_TAG, "Failed to add new device");
@@ -453,7 +455,7 @@ static void root_port_req(hcd_port_handle_t root_port_hdl)
         hcd_port_command(p_hub_driver_obj->constant.root_port_hdl, HCD_PORT_CMD_DISABLE);
     }
     if (port_reqs & PORT_REQ_RECOVER) {
-        ESP_LOGD(HUB_DRIVER_TAG, "Recovering root port");
+        ESP_LOGI(HUB_DRIVER_TAG, "Recovering root port (POWER_ON will follow)");
         ESP_ERROR_CHECK(hcd_port_recover(p_hub_driver_obj->constant.root_port_hdl));
 
         // In case the port's power was turned off with usb_host_lib_set_root_port_power(false)

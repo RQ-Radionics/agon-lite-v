@@ -776,7 +776,6 @@ static usb_speed_t get_usb_port_speed(usb_dwc_speed_t priv)
 static hcd_port_event_t _intr_hdlr_hprt(port_t *port, usb_dwc_hal_port_event_t hal_port_event, bool *yield)
 {
     hcd_port_event_t port_event = HCD_PORT_EVENT_NONE;
-    ESP_EARLY_LOGI(HCD_DWC_TAG, "HAL port event: %d", (int)hal_port_event);
     switch (hal_port_event) {
     case USB_DWC_HAL_PORT_EVENT_CONN: {
         // Don't update state immediately, we still need to debounce.
@@ -1554,6 +1553,7 @@ hcd_port_event_t hcd_port_handle_event(hcd_port_handle_t port_hdl)
     }
     HCD_EXIT_CRITICAL();
     xSemaphoreGive(port->port_mux);
+    ESP_LOGI(HCD_DWC_TAG, "hcd_port_handle_event: returning event=%d", (int)ret);
     return ret;
 }
 
