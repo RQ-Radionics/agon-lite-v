@@ -50,12 +50,12 @@ static const char *TAG = "vdp_int";
 /* ------------------------------------------------------------------ */
 /* Screen geometry                                                      */
 /* ------------------------------------------------------------------ */
-#define FB_W            800
-#define FB_H            600
+#define FB_W            1024
+#define FB_H            768
 #define FONT_W          8
 #define FONT_H          8
 #define BYTES_PER_PIX   3                     /* RGB888 */
-#define FB_SIZE         (FB_W * FB_H * BYTES_PER_PIX)  /* 1440000 */
+#define FB_SIZE         (FB_W * FB_H * BYTES_PER_PIX)  /* 2359296 (~2.25 MB) */
 
 static int     s_mode_w      = 640;
 static int     s_mode_h      = 480;
@@ -79,10 +79,13 @@ static int s_off_y = 0;
 
 static void scale_update(void)
 {
+    /* Integer scale: largest factor where both dimensions fit inside the FB.
+     * Remainder pixels become black border (letterbox/pillarbox). */
     int sx = FB_W / s_mode_w;
     int sy = FB_H / s_mode_h;
     s_scale = (sx < sy) ? sx : sy;
     if (s_scale < 1) s_scale = 1;
+    /* Centre the scaled image; unoccupied border pixels are black. */
     s_off_x = (FB_W - s_mode_w * s_scale) / 2;
     s_off_y = (FB_H - s_mode_h * s_scale) / 2;
 }

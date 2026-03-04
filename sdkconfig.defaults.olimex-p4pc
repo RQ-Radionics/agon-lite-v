@@ -76,10 +76,10 @@ CONFIG_LT8912B_SCL_GPIO=8
 CONFIG_LT8912B_HPD_GPIO=15
 CONFIG_LT8912B_HDMI_MODE=y
 CONFIG_LT8912B_DSI_LANES=2
-# 530 Mbps: byte_clock=66.25 MHz → DPI≈40 MHz (800×600@60Hz needs 40 MHz pclk)
-# 800×600@60Hz: htotal=1056, vtotal=628, pclk≈40 MHz → 60.0 Hz (VESA standard)
-# Minimum for 800×600 RGB888 2-lane: 40 MHz × 24 / 2 = 480 Mbps; 530 gives 10% margin
-CONFIG_LT8912B_DSI_LANE_MBPS=530
+# 1024×768@60Hz: htotal=1344, vtotal=806, pclk=65 MHz, both sync negative
+# 1024×768@60Hz: pclk=65 MHz, VESA standard
+# Minimum for RGB888 2-lane: 65 MHz × 24 / 2 = 780 Mbps; 850 gives ~9% margin
+CONFIG_LT8912B_DSI_LANE_MBPS=850
 
 # mos_kbd component — USB HID keyboard via IDF usb_host (no managed component)
 CONFIG_MOS_KBD_ENABLED=y
