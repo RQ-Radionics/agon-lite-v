@@ -42,6 +42,7 @@
 #include "esp_heap_caps.h"
 
 #include "vdp_font.h"
+#include "mos_audio_synth.h"
 
 static const char *TAG = "vdp_int";
 
@@ -852,6 +853,11 @@ typedef enum {
     VDU_STATE_VDU23_0_MOUSE,      /* VDP_MOUSE: variable, just consume 4 bytes */
     VDU_STATE_VDU23_0_SKIP,       /* skip N bytes of unhandled 23,0 subcmd */
 
+    /* VDU 23,0,0x85 audio sub-protocol (variable length, accumulate) */
+    VDU_STATE_VDU23_0_AUDIO_CH,   /* channel byte */
+    VDU_STATE_VDU23_0_AUDIO_CMD,  /* command byte */
+    VDU_STATE_VDU23_0_AUDIO_ARGS, /* variable arg bytes (see audio_args_needed()) */
+
     /* VDU 23,1 — cursor enable/disable */
     VDU_STATE_VDU23_1_CURSOR,
 
@@ -901,6 +907,36 @@ static int     s_arg_idx = 0;
 
 /* UDG being built */
 static uint8_t s_udg_char = 0;  /* char code 32..255 */
+
+/* Audio command accumulator (VDU 23,0,0x85)
+ * Layout: [0]=channel [1]=cmd [2+]=args (max 16 bytes total)          */
+#define AUDIO_BUF_MAX  16
+static uint8_t s_audio_buf[AUDIO_BUF_MAX];
+static int     s_audio_buf_idx = 0;
+static int     s_audio_args_needed = 0;  /* how many arg bytes to collect */
+
+/* Returns how many argument bytes (after channel+cmd) are needed.
+ * Returns -1 for unknown/variable length commands (use safe max). */
+static int audio_args_needed(uint8_t cmd)
+{
+    switch (cmd) {
+    case AUDIO_CMD_PLAY:         return 5;   /* vol(1) + freq(2) + dur(2) */
+    case AUDIO_CMD_STATUS:       return 0;
+    case AUDIO_CMD_VOLUME:       return 1;
+    case AUDIO_CMD_FREQUENCY:    return 2;
+    case AUDIO_CMD_WAVEFORM:     return 1;   /* min; sample waveform needs +2 */
+    case AUDIO_CMD_ENV_VOLUME:   return 8;   /* max for ADSR type */
+    case AUDIO_CMD_ENV_FREQUENCY:return 4;   /* type(1)+control(1)+step(2) min */
+    case AUDIO_CMD_ENABLE:       return 0;
+    case AUDIO_CMD_DISABLE:      return 0;
+    case AUDIO_CMD_RESET:        return 0;
+    case AUDIO_CMD_SEEK:         return 3;
+    case AUDIO_CMD_DURATION:     return 3;
+    case AUDIO_CMD_SAMPLERATE:   return 2;
+    case AUDIO_CMD_SET_PARAM:    return 2;   /* param(1) + value(1) min */
+    default:                     return 0;
+    }
+}
 
 /* Process one VDU byte */
 static void vdu_process(uint8_t c);
@@ -1221,9 +1257,10 @@ static void vdu_process(uint8_t c)
             s_vdu_state = VDU_STATE_VDU23_0_SCRPIXEL_1;
             s_arg_idx = 0;
             break;
-        case 0x85: /* VDP_AUDIO — audio sub-protocol (variable; skip 4 bytes minimal) */
-            /* TODO: connect to mos_audio */
-            s_vdu_skip = 4; s_vdu_state = VDU_STATE_VDU23_0_SKIP;
+        case 0x85: /* VDP_AUDIO — audio sub-protocol */
+            /* Next byte is the channel number */
+            s_audio_buf_idx = 0;
+            s_vdu_state = VDU_STATE_VDU23_0_AUDIO_CH;
             break;
         case 0x86: /* VDP_MODE — return mode info */
             send_mode_information();
@@ -1334,6 +1371,45 @@ static void vdu_process(uint8_t c)
     case VDU_STATE_VDU23_0_SKIP:
         s_vdu_skip--;
         if (s_vdu_skip == 0) s_vdu_state = VDU_STATE_NORMAL;
+        break;
+
+    /* ---- VDU 23,0,0x85 audio sub-protocol ---- */
+    case VDU_STATE_VDU23_0_AUDIO_CH:
+        s_audio_buf[0] = c;   /* channel */
+        s_audio_buf_idx = 1;
+        s_vdu_state = VDU_STATE_VDU23_0_AUDIO_CMD;
+        break;
+
+    case VDU_STATE_VDU23_0_AUDIO_CMD:
+        s_audio_buf[1] = c;   /* command */
+        s_audio_buf_idx = 2;
+        s_audio_args_needed = audio_args_needed(c);
+        if (s_audio_args_needed == 0) {
+            /* No args — dispatch immediately */
+            uint8_t status = mos_synth_vdu_audio(s_audio_buf, 2);
+            vdp_send_byte(0x23);
+            vdp_send_byte(0x05);   /* PACKET_AUDIO */
+            vdp_send_byte(s_audio_buf[0]);
+            vdp_send_byte(status);
+            s_vdu_state = VDU_STATE_NORMAL;
+        } else {
+            s_vdu_state = VDU_STATE_VDU23_0_AUDIO_ARGS;
+        }
+        break;
+
+    case VDU_STATE_VDU23_0_AUDIO_ARGS:
+        if (s_audio_buf_idx < AUDIO_BUF_MAX) {
+            s_audio_buf[s_audio_buf_idx++] = c;
+        }
+        if (s_audio_buf_idx >= 2 + s_audio_args_needed) {
+            /* All args collected — dispatch */
+            uint8_t status = mos_synth_vdu_audio(s_audio_buf, s_audio_buf_idx);
+            vdp_send_byte(0x23);
+            vdp_send_byte(0x05);   /* PACKET_AUDIO */
+            vdp_send_byte(s_audio_buf[0]);
+            vdp_send_byte(status);
+            s_vdu_state = VDU_STATE_NORMAL;
+        }
         break;
 
     /* ---- VDU 23,1 — cursor enable/disable ---- */
@@ -1680,6 +1756,12 @@ esp_err_t mos_vdp_internal_init(esp_lcd_panel_handle_t dpi_panel)
     if (ok != pdPASS) {
         ESP_LOGE(TAG, "Failed to create render task");
         return ESP_ERR_NO_MEM;
+    }
+
+    /* Start the audio synthesizer (non-fatal if mos_audio is not initialized) */
+    esp_err_t synth_ret = mos_synth_init();
+    if (synth_ret != ESP_OK) {
+        ESP_LOGW(TAG, "mos_synth_init failed (0x%x) — audio disabled", synth_ret);
     }
 
     s_initialized = true;
