@@ -167,6 +167,24 @@ t_mos_api *mos_api_table_get(void);
  */
 void mos_api_set_exit_fn(void (*fn)(int status));
 
+/**
+ * Flash I/O proxy task lifecycle (ESP32-P4 only).
+ *
+ * On ESP32-P4 the user task stack lives in PSRAM. The flash driver asserts
+ * that the current task stack is in internal DRAM before disabling the cache.
+ * To satisfy this, all FAT/flash I/O is routed through a small proxy task
+ * whose stack is in internal DRAM.
+ *
+ * mos_flash_io_start() — spawn the proxy task. Call before launching a user
+ *                         program (from mos_loader, which has a DRAM stack).
+ * mos_flash_io_stop()  — signal the proxy task to exit and wait for it.
+ *                         Call after the user program returns.
+ *
+ * On ESP32-S3 these are no-ops (user task stack is already in DRAM).
+ */
+void mos_flash_io_start(void);
+void mos_flash_io_stop(void);
+
 #ifdef __cplusplus
 }
 #endif
