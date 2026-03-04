@@ -225,40 +225,40 @@ static esp_err_t lt8912b_write_dds_config(void)
     return ESP_OK;
 }
 
-/* Step 8: Video timing — 1024×768@60Hz (ADDR_CEC_DSI = 0x49)
+/* Step 8: Video timing — 800×600@60Hz (ADDR_CEC_DSI = 0x49)
  *
- * Olimex BSP macro ESP_LCD_LT8912B_VIDEO_TIMING_1024x768_60Hz():
- *   hact=1024 htotal=1184 hfp=48 hs=32 hbp=80
- *   vact=768  vtotal=790  vfp=3  vs=4  vbp=15
- *   pclk=56 MHz, h_polarity=1(+), v_polarity=0(-)
+ * Olimex BSP macro ESP_LCD_LT8912B_VIDEO_TIMING_800x600_60Hz():
+ *   hact=800  htotal=1056 hfp=48  hs=128 hbp=88
+ *   vact=600  vtotal=628  vfp=1   vs=4   vbp=23
+ *   pclk=40 MHz, h_polarity=1(+), v_polarity=1(+)
  *
  * Sync polarity reg 0xAB (ADDR_MAIN):
- *   sync_polarity = h_polarity*0x02 + v_polarity*0x01 = 1*2 + 0*1 = 0x02
+ *   sync_polarity = h_polarity*0x02 + v_polarity*0x01 = 1*2 + 1*1 = 0x03
  */
 static esp_err_t lt8912b_write_video_timing(void)
 {
     i2c_master_dev_handle_t d = s_lt.dev_cec_dsi;
 
-    ESP_RETURN_ON_ERROR(lt_write(d, 0x18, 32),            TAG, "vt hs");
+    ESP_RETURN_ON_ERROR(lt_write(d, 0x18, 128),           TAG, "vt hs");
     ESP_RETURN_ON_ERROR(lt_write(d, 0x19, 4),             TAG, "vt vs");
-    ESP_RETURN_ON_ERROR(lt_write(d, 0x1C, 1024 & 0xFF),  TAG, "vt hact_l");
-    ESP_RETURN_ON_ERROR(lt_write(d, 0x1D, 1024 >> 8),    TAG, "vt hact_h");
+    ESP_RETURN_ON_ERROR(lt_write(d, 0x1C, 800 & 0xFF),   TAG, "vt hact_l");
+    ESP_RETURN_ON_ERROR(lt_write(d, 0x1D, 800 >> 8),     TAG, "vt hact_h");
     ESP_RETURN_ON_ERROR(lt_write(d, 0x2F, 0x0C),          TAG, "vt fifo");
-    ESP_RETURN_ON_ERROR(lt_write(d, 0x34, 1184 & 0xFF),  TAG, "vt htot_l");
-    ESP_RETURN_ON_ERROR(lt_write(d, 0x35, 1184 >> 8),    TAG, "vt htot_h");
-    ESP_RETURN_ON_ERROR(lt_write(d, 0x36, 790 & 0xFF),   TAG, "vt vtot_l");
-    ESP_RETURN_ON_ERROR(lt_write(d, 0x37, 790 >> 8),     TAG, "vt vtot_h");
-    ESP_RETURN_ON_ERROR(lt_write(d, 0x38, 15 & 0xFF),    TAG, "vt vbp_l");
-    ESP_RETURN_ON_ERROR(lt_write(d, 0x39, 15 >> 8),      TAG, "vt vbp_h");
-    ESP_RETURN_ON_ERROR(lt_write(d, 0x3A, 3 & 0xFF),     TAG, "vt vfp_l");
-    ESP_RETURN_ON_ERROR(lt_write(d, 0x3B, 3 >> 8),       TAG, "vt vfp_h");
-    ESP_RETURN_ON_ERROR(lt_write(d, 0x3C, 80 & 0xFF),    TAG, "vt hbp_l");
-    ESP_RETURN_ON_ERROR(lt_write(d, 0x3D, 80 >> 8),      TAG, "vt hbp_h");
+    ESP_RETURN_ON_ERROR(lt_write(d, 0x34, 1056 & 0xFF),  TAG, "vt htot_l");
+    ESP_RETURN_ON_ERROR(lt_write(d, 0x35, 1056 >> 8),    TAG, "vt htot_h");
+    ESP_RETURN_ON_ERROR(lt_write(d, 0x36, 628 & 0xFF),   TAG, "vt vtot_l");
+    ESP_RETURN_ON_ERROR(lt_write(d, 0x37, 628 >> 8),     TAG, "vt vtot_h");
+    ESP_RETURN_ON_ERROR(lt_write(d, 0x38, 23 & 0xFF),    TAG, "vt vbp_l");
+    ESP_RETURN_ON_ERROR(lt_write(d, 0x39, 23 >> 8),      TAG, "vt vbp_h");
+    ESP_RETURN_ON_ERROR(lt_write(d, 0x3A, 1 & 0xFF),     TAG, "vt vfp_l");
+    ESP_RETURN_ON_ERROR(lt_write(d, 0x3B, 1 >> 8),       TAG, "vt vfp_h");
+    ESP_RETURN_ON_ERROR(lt_write(d, 0x3C, 88 & 0xFF),    TAG, "vt hbp_l");
+    ESP_RETURN_ON_ERROR(lt_write(d, 0x3D, 88 >> 8),      TAG, "vt hbp_h");
     ESP_RETURN_ON_ERROR(lt_write(d, 0x3E, 48 & 0xFF),    TAG, "vt hfp_l");
     ESP_RETURN_ON_ERROR(lt_write(d, 0x3F, 48 >> 8),      TAG, "vt hfp_h");
 
-    /* sync_polarity = h_pol(1)*0x02 + v_pol(0)*0x01 = 0x02 */
-    ESP_RETURN_ON_ERROR(lt_write(s_lt.dev_main, 0xAB, 0x02), TAG, "vt pol");
+    /* sync_polarity = h_pol(1)*0x02 + v_pol(1)*0x01 = 0x03 */
+    ESP_RETURN_ON_ERROR(lt_write(s_lt.dev_main, 0xAB, 0x03), TAG, "vt pol");
     return ESP_OK;
 }
 
@@ -402,7 +402,7 @@ static esp_err_t lt8912b_init_common(int hpd_gpio)
     }
     ESP_LOGI(TAG, "LT8912B detected (ID 0x%02X%02X)", id_h, id_l);
 
-    ESP_LOGI(TAG, "LT8912B init sequence start (1024x768@60Hz HDMI)");
+    ESP_LOGI(TAG, "LT8912B init sequence start (800x600@60Hz HDMI)");
 
     ESP_RETURN_ON_ERROR(lt8912b_write_digital_clock_en(), TAG, "digital_clock_en");
     ESP_RETURN_ON_ERROR(lt8912b_write_tx_analog(),        TAG, "tx_analog");
@@ -428,7 +428,7 @@ static esp_err_t lt8912b_init_common(int hpd_gpio)
     lt8912b_hpd_gpio_init(hpd_gpio);
 
     s_lt.initialized = true;
-    ESP_LOGI(TAG, "LT8912B initialized — 1024x768@60Hz HDMI");
+    ESP_LOGI(TAG, "LT8912B initialized — 800x600@60Hz HDMI");
 
     if (esp_lcd_lt8912b_is_connected()) {
         ESP_LOGI(TAG, "HDMI cable connected");
