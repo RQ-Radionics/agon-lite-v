@@ -431,6 +431,37 @@ static void fb_plot_pixel(int x, int y, rgb888_t c, int gcol_mode = 0)
     }
 }
 
+/* Fill a horizontal span [x0..x1] at logical row y, fast path for gcol_mode==0.
+ * For gcol_mode != 0 falls back to fb_plot_pixel per pixel.
+ * All coordinates must already be clipped to the graphics viewport. */
+static void fb_fill_hspan(int x0, int x1, int y, rgb888_t c, int gcol_mode)
+{
+    if (x0 > x1) return;
+    if (gcol_mode != 0) {
+        for (int x = x0; x <= x1; x++)
+            fb_plot_pixel(x, y, c, gcol_mode);
+        return;
+    }
+    /* Fast path: write scaled pixels directly */
+    int phys_x0 = s_off_x + x0 * s_scale;
+    int phys_y0 = s_off_y + y  * s_scale;
+    int phys_w  = (x1 - x0 + 1) * s_scale;
+    /* Bounds check */
+    if ((unsigned)phys_x0 >= (unsigned)FB_W || (unsigned)phys_y0 >= (unsigned)FB_H) return;
+    if (phys_x0 + phys_w > FB_W) phys_w = FB_W - phys_x0;
+    for (int dy = 0; dy < s_scale; dy++) {
+        int py = phys_y0 + dy;
+        if ((unsigned)py >= (unsigned)FB_H) break;
+        uint8_t *row = s_fb[0] + (py * FB_W + phys_x0) * BYTES_PER_PIX;
+        /* Write 3-byte pixels; use loop (RGB888 — can't memset directly) */
+        uint8_t *p = row;
+        for (int i = 0; i < phys_w; i++) {
+            p[0] = c.r; p[1] = c.g; p[2] = c.b;
+            p += BYTES_PER_PIX;
+        }
+    }
+}
+
 /* Mark FB dirty — the periodic timer will push it to the display at ~60 Hz.
  * Use fb_flush_now() for operations where immediate visibility is needed
  * (text, CLS, mode change). */
@@ -540,11 +571,8 @@ static void clear_graphics_viewport(int colour_idx)
 {
     /* Clear the graphics viewport only, in the given colour */
     rgb888_t c = s_palette[colour_idx & 0xF];
-    for (int y = s_gvp_y0; y <= s_gvp_y1; y++) {
-        for (int x = s_gvp_x0; x <= s_gvp_x1; x++) {
-            fb_plot_pixel(x, y, c, 0);
-        }
-    }
+    for (int y = s_gvp_y0; y <= s_gvp_y1; y++)
+        fb_fill_hspan(s_gvp_x0, s_gvp_x1, y, c, 0);
 }
 
 static void scroll_up(void)
@@ -679,8 +707,7 @@ static void plot_filled_rect(int x0, int y0, int x1, int y1, rgb888_t c)
     int cy0 = (sy0 < s_gvp_y0) ? s_gvp_y0 : sy0;
     int cy1 = (sy1 > s_gvp_y1) ? s_gvp_y1 : sy1;
     for (int y = cy0; y <= cy1; y++)
-        for (int x = cx0; x <= cx1; x++)
-            fb_plot_pixel(x, y, c, s_gcol_mode);
+        fb_fill_hspan(cx0, cx1, y, c, s_gcol_mode);
 }
 
 static void plot_filled_triangle(int x0, int y0, int x1, int y1, int x2, int y2, rgb888_t c)
@@ -723,8 +750,7 @@ static void plot_filled_triangle(int x0, int y0, int x1, int y1, int x2, int y2,
             /* Clip X span to viewport */
             if (lx < s_gvp_x0) lx = s_gvp_x0;
             if (rx > s_gvp_x1) rx = s_gvp_x1;
-            for (int x = lx; x <= rx; x++)
-                fb_plot_pixel(x, y, c, s_gcol_mode);
+            fb_fill_hspan(lx, rx, y, c, s_gcol_mode);
         }
     };
 
@@ -774,10 +800,14 @@ static void plot_filled_circle(int cx, int cy, int x2, int y2, rgb888_t c)
 
     int xx = 0, yy = r, err2 = 1 - r;
     while (xx <= yy) {
-        for (int ix = scx-yy; ix <= scx+yy; ix++) fb_plot_pixel(ix, scy+xx, c, s_gcol_mode);
-        for (int ix = scx-yy; ix <= scx+yy; ix++) fb_plot_pixel(ix, scy-xx, c, s_gcol_mode);
-        for (int ix = scx-xx; ix <= scx+xx; ix++) fb_plot_pixel(ix, scy+yy, c, s_gcol_mode);
-        for (int ix = scx-xx; ix <= scx+xx; ix++) fb_plot_pixel(ix, scy-yy, c, s_gcol_mode);
+        int lx0 = (scx-yy < s_gvp_x0) ? s_gvp_x0 : scx-yy;
+        int rx0 = (scx+yy > s_gvp_x1) ? s_gvp_x1 : scx+yy;
+        int lx1 = (scx-xx < s_gvp_x0) ? s_gvp_x0 : scx-xx;
+        int rx1 = (scx+xx > s_gvp_x1) ? s_gvp_x1 : scx+xx;
+        if (scy+xx >= s_gvp_y0 && scy+xx <= s_gvp_y1) fb_fill_hspan(lx0, rx0, scy+xx, c, s_gcol_mode);
+        if (scy-xx >= s_gvp_y0 && scy-xx <= s_gvp_y1) fb_fill_hspan(lx0, rx0, scy-xx, c, s_gcol_mode);
+        if (scy+yy >= s_gvp_y0 && scy+yy <= s_gvp_y1) fb_fill_hspan(lx1, rx1, scy+yy, c, s_gcol_mode);
+        if (scy-yy >= s_gvp_y0 && scy-yy <= s_gvp_y1) fb_fill_hspan(lx1, rx1, scy-yy, c, s_gcol_mode);
         if (err2 < 0) {
             err2 += 2*xx + 3;
         } else {
