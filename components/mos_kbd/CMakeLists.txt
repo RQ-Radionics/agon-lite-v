@@ -6,6 +6,5 @@ idf_component_register(
         log
         freertos
         usb
-    PRIV_REQUIRES
-        espressif__usb_host_hid
+
 )

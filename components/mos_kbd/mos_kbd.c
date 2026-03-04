@@ -1,11 +1,15 @@
 /*
  * mos_kbd.c — USB HID keyboard driver for ESP32-MOS
  *
+ * Uses the IDF USB host stack directly (usb_host.h) — no managed components.
+ *
  * Architecture:
- *   - USB host stack installed on PHY0 (OTG20 HS, GPIO24/25, peripheral_map=0)
+ *   - USB host stack installed on PHY0 (OTG20 HS, UTMI pads, peripheral_map=0)
  *   - FE1.1s USB hub on GPIO21 (HUB_RST# active LOW; drive HIGH before init)
- *   - usb_lib_task (core 0): calls usb_host_lib_handle_events() in a loop
- *   - HID host driver installs its own background task (core 0)
+ *   - usb_lib_task (core 0): drives usb_host_lib_handle_events()
+ *   - usb_client_task (core 0): drives usb_host_client_handle_events()
+ *     - On NEW_DEV: open device, find HID keyboard interface, claim, configure
+ *     - Submits interrupt IN transfers; on completion processes HID report
  *   - On keyboard HID report: translate HID Usage IDs → PS/2 Set 2 scancodes
  *   - Scancodes delivered byte-by-byte via registered callback
  *
@@ -15,9 +19,10 @@
  *   Extended make:  0xE0 <make>
  *   Extended break: 0xE0 0xF0 <make>
  *
- * HID keyboard reports carry up to 6 simultaneously pressed keys.
- * We track the previous report to detect new presses (make) and
- * released keys (break) by diffing the two keycode arrays.
+ * HID keyboard boot-protocol reports (8 bytes):
+ *   [0] modifier bitmask
+ *   [1] reserved
+ *   [2..7] up to 6 simultaneous keycodes (HID Usage IDs, page 0x07)
  */
 
 #include "mos_kbd.h"
@@ -31,10 +36,22 @@
 #include "driver/gpio.h"
 #include "esp_log.h"
 #include "usb/usb_host.h"
-#include "usb/hid_host.h"
-#include "usb/hid_usage_keyboard.h"
+#include "usb/usb_types_ch9.h"
+#include "usb/usb_helpers.h"
 
 static const char *TAG = "mos_kbd";
+
+/* --------------------------------------------------------------------------
+ * HID class constants (USB HID spec 1.11)
+ * -------------------------------------------------------------------------- */
+#define HID_CLASS_CODE          0x03
+#define HID_SUBCLASS_BOOT       0x01
+#define HID_PROTOCOL_KEYBOARD   0x01
+
+/* HID class-specific requests */
+#define HID_REQ_SET_PROTOCOL    0x0B
+#define HID_REQ_SET_IDLE        0x0A
+#define HID_PROTOCOL_BOOT       0x00   /* value for SET_PROTOCOL → boot protocol */
 
 /* --------------------------------------------------------------------------
  * HID Usage ID → PS/2 Set 2 scancode table
@@ -43,9 +60,6 @@ static const char *TAG = "mos_kbd";
  * Value = PS/2 Set 2 make code, or 0x00 if no mapping.
  * Extended keys (0xE0 prefix) are indicated by bit 7 = 1; the actual
  * make code is bits[6:0].  The emit_scancode() helper handles this.
- *
- * Source: USB HID Usage Tables §10 (Keyboard/Keypad page 0x07)
- *         PS/2 Set 2 tables from https://www.win.tue.nl/~aeb/linux/kbd/scancodes-10.html
  * -------------------------------------------------------------------------- */
 #define EXT(x)  ((uint8_t)(0x80 | (x)))   /* extended key: E0 prefix */
 
@@ -100,7 +114,7 @@ static const uint8_t hid_to_ps2[128] = {
     /* 0x2F */ 0x54,        /* [ / { */
     /* 0x30 */ 0x5B,        /* ] / } */
     /* 0x31 */ 0x5D,        /* \ / | */
-    /* 0x32 */ 0x5D,        /* Non-US # / ~ (same as backslash on US layout) */
+    /* 0x32 */ 0x5D,        /* Non-US # / ~ */
     /* 0x33 */ 0x4C,        /* ; / : */
     /* 0x34 */ 0x52,        /* ' / " */
     /* 0x35 */ 0x0E,        /* ` / ~ */
@@ -120,25 +134,25 @@ static const uint8_t hid_to_ps2[128] = {
     /* 0x43 */ 0x09,        /* F10 */
     /* 0x44 */ 0x78,        /* F11 */
     /* 0x45 */ 0x07,        /* F12 */
-    /* 0x46 */ EXT(0x7C),   /* Print Screen (extended) */
+    /* 0x46 */ EXT(0x7C),   /* Print Screen */
     /* 0x47 */ 0x7E,        /* Scroll Lock */
-    /* 0x48 */ 0x00,        /* Pause / Break (complex 8-byte sequence — skipped) */
-    /* 0x49 */ EXT(0x70),   /* Insert (extended) */
-    /* 0x4A */ EXT(0x6C),   /* Home (extended) */
-    /* 0x4B */ EXT(0x7D),   /* Page Up (extended) */
-    /* 0x4C */ EXT(0x71),   /* Delete (extended) */
-    /* 0x4D */ EXT(0x69),   /* End (extended) */
-    /* 0x4E */ EXT(0x7A),   /* Page Down (extended) */
-    /* 0x4F */ EXT(0x74),   /* Right Arrow (extended) */
-    /* 0x50 */ EXT(0x6B),   /* Left Arrow (extended) */
-    /* 0x51 */ EXT(0x72),   /* Down Arrow (extended) */
-    /* 0x52 */ EXT(0x75),   /* Up Arrow (extended) */
+    /* 0x48 */ 0x00,        /* Pause/Break (complex sequence — skipped) */
+    /* 0x49 */ EXT(0x70),   /* Insert */
+    /* 0x4A */ EXT(0x6C),   /* Home */
+    /* 0x4B */ EXT(0x7D),   /* Page Up */
+    /* 0x4C */ EXT(0x71),   /* Delete */
+    /* 0x4D */ EXT(0x69),   /* End */
+    /* 0x4E */ EXT(0x7A),   /* Page Down */
+    /* 0x4F */ EXT(0x74),   /* Right Arrow */
+    /* 0x50 */ EXT(0x6B),   /* Left Arrow */
+    /* 0x51 */ EXT(0x72),   /* Down Arrow */
+    /* 0x52 */ EXT(0x75),   /* Up Arrow */
     /* 0x53 */ 0x77,        /* Num Lock */
-    /* 0x54 */ EXT(0x4A),   /* Keypad / (extended) */
+    /* 0x54 */ EXT(0x4A),   /* Keypad / */
     /* 0x55 */ 0x7C,        /* Keypad * */
     /* 0x56 */ 0x7B,        /* Keypad - */
     /* 0x57 */ 0x79,        /* Keypad + */
-    /* 0x58 */ EXT(0x5A),   /* Keypad Enter (extended) */
+    /* 0x58 */ EXT(0x5A),   /* Keypad Enter */
     /* 0x59 */ 0x69,        /* Keypad 1 / End */
     /* 0x5A */ 0x72,        /* Keypad 2 / Down */
     /* 0x5B */ 0x7A,        /* Keypad 3 / PgDn */
@@ -151,48 +165,42 @@ static const uint8_t hid_to_ps2[128] = {
     /* 0x62 */ 0x70,        /* Keypad 0 / Ins */
     /* 0x63 */ 0x71,        /* Keypad . / Del */
     /* 0x64 */ 0x61,        /* Non-US \ / | */
-    /* 0x65 */ EXT(0x2F),   /* Application (Menu key, extended) */
-    /* 0x66 */ 0x00,        /* Power (ignored) */
-    /* 0x67 */ 0x00,        /* Keypad = (not on most keyboards) */
-    /* 0x68 */ 0x00,        /* F13 */
-    /* 0x69 */ 0x00,        /* F14 */
-    /* 0x6A */ 0x00,        /* F15 */
-    /* 0x6B */ 0x00,        /* F16 */
-    /* 0x6C */ 0x00,        /* F17 */
-    /* 0x6D */ 0x00,        /* F18 */
-    /* 0x6E */ 0x00,        /* F19 */
-    /* 0x6F */ 0x00,        /* F20 */
-    /* 0x70 */ 0x00,        /* F21 */
-    /* 0x71 */ 0x00,        /* F22 */
-    /* 0x72 */ 0x00,        /* F23 */
-    /* 0x73 */ 0x00,        /* F24 */
-    /* 0x74..0x7F */ 0,0,0,0, 0,0,0,0, 0,0,0,0
+    /* 0x65 */ EXT(0x2F),   /* Application (Menu) */
+    /* 0x66..0x7F */ 0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0
 };
 
-/*
- * Modifier key → PS/2 Set 2 make codes.
- * HID modifier byte bit positions:
- *   bit 0: Left Ctrl   bit 1: Left Shift  bit 2: Left Alt   bit 3: Left GUI
- *   bit 4: Right Ctrl  bit 5: Right Shift bit 6: Right Alt  bit 7: Right GUI
- */
+/* Modifier key → PS/2 Set 2 make codes (bit 7 = extended, bits[6:0] = make) */
 static const uint8_t modifier_make[8] = {
     0x14,        /* Left Ctrl */
     0x12,        /* Left Shift */
     0x11,        /* Left Alt */
-    EXT(0x1F),   /* Left GUI (extended) */
-    EXT(0x14),   /* Right Ctrl (extended) */
+    EXT(0x1F),   /* Left GUI */
+    EXT(0x14),   /* Right Ctrl */
     0x59,        /* Right Shift */
-    EXT(0x11),   /* Right Alt / AltGr (extended) */
-    EXT(0x27),   /* Right GUI (extended) */
+    EXT(0x11),   /* Right Alt / AltGr */
+    EXT(0x27),   /* Right GUI */
 };
 
 /* --------------------------------------------------------------------------
  * Internal state
  * -------------------------------------------------------------------------- */
 
-static mos_kbd_scancode_cb_t s_cb           = NULL;
-static TaskHandle_t          s_usb_lib_task = NULL;
-static bool                  s_running      = false;
+/* Per-device context — only one keyboard at a time */
+typedef struct {
+    usb_device_handle_t dev_hdl;
+    usb_transfer_t     *xfer;          /* interrupt IN transfer (reused) */
+    uint8_t             iface_num;     /* claimed HID interface number */
+    uint8_t             ep_addr;       /* interrupt IN endpoint address */
+    uint16_t            ep_mps;        /* max packet size of that endpoint */
+    bool                active;
+} kbd_dev_t;
+
+static mos_kbd_scancode_cb_t  s_cb           = NULL;
+static usb_host_client_handle_t s_client_hdl = NULL;
+static TaskHandle_t           s_lib_task     = NULL;
+static TaskHandle_t           s_client_task  = NULL;
+static bool                   s_running      = false;
+static kbd_dev_t               s_dev         = { 0 };
 
 /* Previous HID report state for diff-based make/break detection */
 static uint8_t s_prev_mod     = 0;
@@ -202,92 +210,55 @@ static uint8_t s_prev_keys[6] = {0};
  * Scancode emission
  * -------------------------------------------------------------------------- */
 
-static inline void emit_byte(uint8_t b)
+static inline void emit_byte(uint8_t b) { if (s_cb) s_cb(b); }
+
+static void emit_make(uint8_t hid)
 {
-    if (s_cb) s_cb(b);
+    if (hid >= 128) return;
+    uint8_t sc = hid_to_ps2[hid];
+    if (!sc) return;
+    if (sc & 0x80) { emit_byte(0xE0); emit_byte(sc & 0x7F); }
+    else           { emit_byte(sc); }
 }
 
-/* Emit a PS/2 Set 2 make code for a given HID usage (0x04..0x7F). */
-static void emit_make(uint8_t hid_usage)
+static void emit_break(uint8_t hid)
 {
-    if (hid_usage >= 128) return;
-    uint8_t sc = hid_to_ps2[hid_usage];
-    if (sc == 0x00) return;
-    if (sc & 0x80) {
-        emit_byte(0xE0);
-        emit_byte(sc & 0x7F);
-    } else {
-        emit_byte(sc);
-    }
+    if (hid >= 128) return;
+    uint8_t sc = hid_to_ps2[hid];
+    if (!sc) return;
+    if (sc & 0x80) { emit_byte(0xE0); emit_byte(0xF0); emit_byte(sc & 0x7F); }
+    else           { emit_byte(0xF0); emit_byte(sc); }
 }
 
-/* Emit a PS/2 Set 2 break code (0xF0 prefix, or 0xE0 0xF0 for extended). */
-static void emit_break(uint8_t hid_usage)
-{
-    if (hid_usage >= 128) return;
-    uint8_t sc = hid_to_ps2[hid_usage];
-    if (sc == 0x00) return;
-    if (sc & 0x80) {
-        emit_byte(0xE0);
-        emit_byte(0xF0);
-        emit_byte(sc & 0x7F);
-    } else {
-        emit_byte(0xF0);
-        emit_byte(sc);
-    }
-}
-
-/* Emit make code for a modifier bit (0..7). */
 static void emit_modifier_make(int bit)
 {
     uint8_t sc = modifier_make[bit];
-    if (sc == 0x00) return;
-    if (sc & 0x80) {
-        emit_byte(0xE0);
-        emit_byte(sc & 0x7F);
-    } else {
-        emit_byte(sc);
-    }
+    if (!sc) return;
+    if (sc & 0x80) { emit_byte(0xE0); emit_byte(sc & 0x7F); }
+    else           { emit_byte(sc); }
 }
 
-/* Emit break code for a modifier bit (0..7). */
 static void emit_modifier_break(int bit)
 {
     uint8_t sc = modifier_make[bit];
-    if (sc == 0x00) return;
-    if (sc & 0x80) {
-        emit_byte(0xE0);
-        emit_byte(0xF0);
-        emit_byte(sc & 0x7F);
-    } else {
-        emit_byte(0xF0);
-        emit_byte(sc);
-    }
+    if (!sc) return;
+    if (sc & 0x80) { emit_byte(0xE0); emit_byte(0xF0); emit_byte(sc & 0x7F); }
+    else           { emit_byte(0xF0); emit_byte(sc); }
 }
 
 /* --------------------------------------------------------------------------
  * HID report processing
  * -------------------------------------------------------------------------- */
 
-/*
- * Standard HID keyboard boot report layout (8 bytes):
- *   [0] modifier bitmask
- *   [1] reserved
- *   [2..7] up to 6 simultaneous keycodes (HID Usage IDs, page 0x07)
- *
- * We diff against the previous report to generate make/break events.
- */
 static void process_keyboard_report(const uint8_t *data, size_t len)
 {
-    if (len < 3) return;  /* need at least modifier + reserved + 1 keycode slot */
+    if (len < 3) return;
 
     uint8_t mod  = data[0];
-    /* data[1] is reserved — skip */
     const uint8_t *keys = &data[2];
     int nkeys = (int)(len - 2);
     if (nkeys > 6) nkeys = 6;
 
-    /* --- Modifier diffs --- */
     uint8_t mod_pressed  = mod & ~s_prev_mod;
     uint8_t mod_released = s_prev_mod & ~mod;
     for (int bit = 0; bit < 8; bit++) {
@@ -295,145 +266,329 @@ static void process_keyboard_report(const uint8_t *data, size_t len)
         if (mod_released & (1 << bit)) emit_modifier_break(bit);
     }
 
-    /* --- Keycode diffs --- */
-    /* Make: keys in current report but not in previous */
     for (int i = 0; i < nkeys; i++) {
         uint8_t k = keys[i];
-        if (k == 0x00 || k == 0x01) continue;  /* no event / rollover */
-        bool was_pressed = false;
-        for (int j = 0; j < 6; j++) {
-            if (s_prev_keys[j] == k) { was_pressed = true; break; }
-        }
-        if (!was_pressed) emit_make(k);
+        if (k < 4) continue;
+        bool was = false;
+        for (int j = 0; j < 6; j++) if (s_prev_keys[j] == k) { was = true; break; }
+        if (!was) emit_make(k);
     }
 
-    /* Break: keys in previous report but not in current */
     for (int j = 0; j < 6; j++) {
         uint8_t k = s_prev_keys[j];
-        if (k == 0x00 || k == 0x01) continue;
-        bool still_pressed = false;
-        for (int i = 0; i < nkeys; i++) {
-            if (keys[i] == k) { still_pressed = true; break; }
-        }
-        if (!still_pressed) emit_break(k);
+        if (k < 4) continue;
+        bool still = false;
+        for (int i = 0; i < nkeys; i++) if (keys[i] == k) { still = true; break; }
+        if (!still) emit_break(k);
     }
 
-    /* Update state */
     s_prev_mod = mod;
-    memset(s_prev_keys, 0, sizeof(s_prev_keys));
-    for (int i = 0; i < nkeys && i < 6; i++) {
-        s_prev_keys[i] = keys[i];
-    }
+    memset(s_prev_keys, 0, 6);
+    for (int i = 0; i < nkeys && i < 6; i++) s_prev_keys[i] = keys[i];
 }
-
-/* Forward declaration — defined below */
-static void hid_report_callback(hid_host_device_handle_t hid_device_handle,
-                                const hid_host_interface_event_t event,
-                                void *arg);
 
 /* --------------------------------------------------------------------------
- * HID host event callback
- *
- * Called from the HID background task (core 0), NOT from an ISR.
- * It is safe to call hid_host_device_open() and related functions here.
+ * Interrupt IN transfer callback — called from usb_host_client_handle_events
  * -------------------------------------------------------------------------- */
 
-static void hid_host_device_callback(hid_host_device_handle_t hid_device_handle,
-                                     const hid_host_driver_event_t event,
-                                     void *arg)
+static void intr_xfer_cb(usb_transfer_t *xfer)
 {
-    if (event != HID_HOST_DRIVER_EVENT_CONNECTED) return;
+    if (!s_dev.active) return;
 
-    hid_host_dev_params_t params;
-    if (hid_host_device_get_params(hid_device_handle, &params) != ESP_OK) return;
-    ESP_LOGI(TAG, "HID device connected: addr=%d subclass=%d proto=%d",
-             params.addr, params.sub_class, params.proto);
+    if (xfer->status == USB_TRANSFER_STATUS_COMPLETED) {
+        process_keyboard_report(xfer->data_buffer, xfer->actual_num_bytes);
+    } else if (xfer->status == USB_TRANSFER_STATUS_NO_DEVICE ||
+               xfer->status == USB_TRANSFER_STATUS_CANCELED) {
+        return;  /* device gone, don't resubmit */
+    } else {
+        ESP_LOGW(TAG, "Interrupt xfer status %d", xfer->status);
+    }
 
-    hid_host_device_config_t dev_config = {
-        .callback     = hid_report_callback,
-        .callback_arg = NULL,
-    };
-    if (hid_host_device_open(hid_device_handle, &dev_config) != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to open HID device");
-        return;
+    /* Resubmit for next report */
+    if (s_dev.active) {
+        usb_host_transfer_submit(xfer);
     }
-    /* Set boot protocol for keyboards so report layout is standard */
-    if (params.sub_class == HID_SUBCLASS_BOOT_INTERFACE &&
-        params.proto     == HID_PROTOCOL_KEYBOARD) {
-        hid_class_request_set_protocol(hid_device_handle, HID_REPORT_PROTOCOL_BOOT);
-        hid_class_request_set_idle(hid_device_handle, 0, 0);
-    }
-    hid_host_device_start(hid_device_handle);
 }
 
-/* Handle HID reports arriving via the report callback */
-static void hid_report_callback(hid_host_device_handle_t hid_device_handle,
-                                const hid_host_interface_event_t event,
-                                void *arg)
+/* --------------------------------------------------------------------------
+ * Control transfer: HID SET_PROTOCOL and SET_IDLE
+ * -------------------------------------------------------------------------- */
+
+/* Synchronous control transfer helper — blocks until complete or timeout.
+ * Uses a stack-allocated transfer for one-shot control requests. */
+typedef struct { SemaphoreHandle_t done; usb_transfer_status_t status; } ctrl_ctx_t;
+
+static void ctrl_cb(usb_transfer_t *xfer)
 {
-    uint8_t data[8];
-    size_t  data_len = 0;
-    hid_host_dev_params_t params;
+    ctrl_ctx_t *ctx = (ctrl_ctx_t *)xfer->context;
+    ctx->status = xfer->status;
+    xSemaphoreGive(ctx->done);
+}
 
-    if (hid_host_device_get_params(hid_device_handle, &params) != ESP_OK) return;
+static esp_err_t hid_set_protocol_boot(usb_device_handle_t dev, uint8_t iface)
+{
+    usb_transfer_t *xfer = NULL;
+    /* 8-byte setup packet + 0 data bytes */
+    if (usb_host_transfer_alloc(8, 0, &xfer) != ESP_OK) return ESP_ERR_NO_MEM;
 
-    switch (event) {
-    case HID_HOST_INTERFACE_EVENT_INPUT_REPORT:
-        data_len = sizeof(data);
-        if (hid_host_device_get_raw_input_report_data(hid_device_handle,
-                                                       data, sizeof(data),
-                                                       &data_len) == ESP_OK) {
-            if (params.sub_class == HID_SUBCLASS_BOOT_INTERFACE &&
-                params.proto     == HID_PROTOCOL_KEYBOARD) {
-                process_keyboard_report(data, data_len);
+    ctrl_ctx_t ctx = { .done = xSemaphoreCreateBinary(), .status = USB_TRANSFER_STATUS_ERROR };
+    xfer->device_handle = dev;
+    xfer->bEndpointAddress = 0;  /* EP0 */
+    xfer->callback = ctrl_cb;
+    xfer->context  = &ctx;
+    xfer->timeout_ms = 1000;
+    xfer->num_bytes  = 8;
+
+    /* SET_PROTOCOL: bmRequestType=0x21 (Class, Interface, Host-to-Device),
+     * bRequest=0x0B, wValue=0x0000 (boot protocol), wIndex=iface, wLength=0 */
+    usb_setup_packet_t *setup = (usb_setup_packet_t *)xfer->data_buffer;
+    setup->bmRequestType = 0x21;
+    setup->bRequest      = HID_REQ_SET_PROTOCOL;
+    setup->wValue        = HID_PROTOCOL_BOOT;
+    setup->wIndex        = iface;
+    setup->wLength       = 0;
+
+    usb_host_transfer_submit_control(s_client_hdl, xfer);
+    xSemaphoreTake(ctx.done, pdMS_TO_TICKS(1500));
+    vSemaphoreDelete(ctx.done);
+    esp_err_t ret = (ctx.status == USB_TRANSFER_STATUS_COMPLETED) ? ESP_OK : ESP_FAIL;
+    usb_host_transfer_free(xfer);
+    return ret;
+}
+
+static esp_err_t hid_set_idle(usb_device_handle_t dev, uint8_t iface)
+{
+    usb_transfer_t *xfer = NULL;
+    if (usb_host_transfer_alloc(8, 0, &xfer) != ESP_OK) return ESP_ERR_NO_MEM;
+
+    ctrl_ctx_t ctx = { .done = xSemaphoreCreateBinary(), .status = USB_TRANSFER_STATUS_ERROR };
+    xfer->device_handle    = dev;
+    xfer->bEndpointAddress = 0;
+    xfer->callback = ctrl_cb;
+    xfer->context  = &ctx;
+    xfer->timeout_ms = 1000;
+    xfer->num_bytes  = 8;
+
+    /* SET_IDLE: rate=0 (indefinite), report_id=0 */
+    usb_setup_packet_t *setup = (usb_setup_packet_t *)xfer->data_buffer;
+    setup->bmRequestType = 0x21;
+    setup->bRequest      = HID_REQ_SET_IDLE;
+    setup->wValue        = 0x0000;
+    setup->wIndex        = iface;
+    setup->wLength       = 0;
+
+    usb_host_transfer_submit_control(s_client_hdl, xfer);
+    xSemaphoreTake(ctx.done, pdMS_TO_TICKS(1500));
+    vSemaphoreDelete(ctx.done);
+    esp_err_t ret = (ctx.status == USB_TRANSFER_STATUS_COMPLETED) ? ESP_OK : ESP_FAIL;
+    usb_host_transfer_free(xfer);
+    return ret;
+}
+
+/* --------------------------------------------------------------------------
+ * Device open: find HID keyboard interface and start polling
+ * -------------------------------------------------------------------------- */
+
+static void kbd_device_open(uint8_t dev_addr)
+{
+    usb_device_handle_t dev_hdl;
+    if (usb_host_device_open(s_client_hdl, dev_addr, &dev_hdl) != ESP_OK) {
+        ESP_LOGE(TAG, "Cannot open device addr=%d", dev_addr);
+        return;
+    }
+
+    /* Walk config descriptor to find HID keyboard interface + interrupt IN EP */
+    const usb_config_desc_t *cfg = NULL;
+    if (usb_host_get_active_config_descriptor(dev_hdl, &cfg) != ESP_OK || !cfg) {
+        ESP_LOGE(TAG, "Cannot get config descriptor");
+        usb_host_device_close(s_client_hdl, dev_hdl);
+        return;
+    }
+
+    int                       offset     = 0;
+    const usb_intf_desc_t    *found_intf = NULL;
+    const usb_ep_desc_t      *found_ep   = NULL;
+
+    /* Iterate descriptors */
+    int total = cfg->wTotalLength;
+    const uint8_t *p = (const uint8_t *)cfg;
+    while (offset < total) {
+        uint8_t len  = p[offset];
+        uint8_t type = p[offset + 1];
+        if (len < 2) break;
+
+        if (type == USB_B_DESCRIPTOR_TYPE_INTERFACE) {
+            const usb_intf_desc_t *intf = (const usb_intf_desc_t *)(p + offset);
+            if (intf->bInterfaceClass    == HID_CLASS_CODE &&
+                intf->bInterfaceSubClass == HID_SUBCLASS_BOOT &&
+                intf->bInterfaceProtocol == HID_PROTOCOL_KEYBOARD) {
+                found_intf = intf;
+                found_ep   = NULL;  /* reset — look for EP in this interface */
             }
         }
-        break;
 
-    case HID_HOST_INTERFACE_EVENT_DISCONNECTED:
-        /* Reset state so stale keys don't stick after reconnect */
-        s_prev_mod = 0;
-        memset(s_prev_keys, 0, sizeof(s_prev_keys));
-        hid_host_device_close(hid_device_handle);
-        break;
+        if (type == USB_B_DESCRIPTOR_TYPE_ENDPOINT && found_intf && !found_ep) {
+            const usb_ep_desc_t *ep = (const usb_ep_desc_t *)(p + offset);
+            /* Interrupt IN: bmAttributes[1:0]=3, bEndpointAddress bit7=1 */
+            if ((ep->bmAttributes & 0x03) == 0x03 &&
+                (ep->bEndpointAddress & 0x80)) {
+                found_ep = ep;
+            }
+        }
 
-    case HID_HOST_INTERFACE_EVENT_TRANSFER_ERROR:
-        ESP_LOGW(TAG, "HID transfer error");
-        break;
+        offset += len;
+    }
 
+    if (!found_intf || !found_ep) {
+        ESP_LOGW(TAG, "No HID boot keyboard found on device addr=%d", dev_addr);
+        usb_host_device_close(s_client_hdl, dev_hdl);
+        return;
+    }
+
+    uint8_t  iface   = found_intf->bInterfaceNumber;
+    uint8_t  ep_addr = found_ep->bEndpointAddress;
+    uint16_t ep_mps  = found_ep->wMaxPacketSize;
+
+    ESP_LOGI(TAG, "HID keyboard: addr=%d iface=%d ep=0x%02X mps=%d",
+             dev_addr, iface, ep_addr, ep_mps);
+
+    if (usb_host_interface_claim(s_client_hdl, dev_hdl, iface, 0) != ESP_OK) {
+        ESP_LOGE(TAG, "Cannot claim interface %d", iface);
+        usb_host_device_close(s_client_hdl, dev_hdl);
+        return;
+    }
+
+    /* Configure: boot protocol + no idle rate */
+    if (hid_set_protocol_boot(dev_hdl, iface) != ESP_OK)
+        ESP_LOGW(TAG, "SET_PROTOCOL failed (non-fatal)");
+    if (hid_set_idle(dev_hdl, iface) != ESP_OK)
+        ESP_LOGW(TAG, "SET_IDLE failed (non-fatal)");
+
+    /* Allocate and submit interrupt IN transfer */
+    usb_transfer_t *xfer = NULL;
+    if (usb_host_transfer_alloc(ep_mps, 0, &xfer) != ESP_OK) {
+        ESP_LOGE(TAG, "Cannot allocate interrupt transfer");
+        usb_host_interface_release(s_client_hdl, dev_hdl, iface);
+        usb_host_device_close(s_client_hdl, dev_hdl);
+        return;
+    }
+
+    xfer->device_handle    = dev_hdl;
+    xfer->bEndpointAddress = ep_addr;
+    xfer->callback         = intr_xfer_cb;
+    xfer->context          = NULL;
+    xfer->timeout_ms       = 0;          /* 0 = no timeout on interrupt EP */
+    xfer->num_bytes        = ep_mps;
+
+    s_dev.dev_hdl  = dev_hdl;
+    s_dev.xfer     = xfer;
+    s_dev.iface_num = iface;
+    s_dev.ep_addr  = ep_addr;
+    s_dev.ep_mps   = ep_mps;
+    s_dev.active   = true;
+
+    s_prev_mod = 0;
+    memset(s_prev_keys, 0, 6);
+
+    if (usb_host_transfer_submit(xfer) != ESP_OK) {
+        ESP_LOGE(TAG, "Cannot submit interrupt transfer");
+        s_dev.active = false;
+        usb_host_transfer_free(xfer);
+        s_dev.xfer = NULL;
+        usb_host_interface_release(s_client_hdl, dev_hdl, iface);
+        usb_host_device_close(s_client_hdl, dev_hdl);
+        return;
+    }
+
+    ESP_LOGI(TAG, "Keyboard polling started");
+}
+
+static void kbd_device_close(void)
+{
+    if (!s_dev.active) return;
+    s_dev.active = false;
+
+    if (s_dev.xfer) {
+        usb_host_transfer_free(s_dev.xfer);
+        s_dev.xfer = NULL;
+    }
+    if (s_dev.dev_hdl) {
+        usb_host_interface_release(s_client_hdl, s_dev.dev_hdl, s_dev.iface_num);
+        usb_host_device_close(s_client_hdl, s_dev.dev_hdl);
+        s_dev.dev_hdl = NULL;
+    }
+    s_prev_mod = 0;
+    memset(s_prev_keys, 0, 6);
+}
+
+/* --------------------------------------------------------------------------
+ * USB host library task (core 0) — drives the HCD/HCI layer
+ * -------------------------------------------------------------------------- */
+
+static void usb_lib_task(void *arg)
+{
+    xTaskNotifyGive((TaskHandle_t)arg);
+    ESP_LOGI(TAG, "USB lib task running");
+
+    while (s_running) {
+        uint32_t flags;
+        usb_host_lib_handle_events(portMAX_DELAY, &flags);
+        if (flags & USB_HOST_LIB_EVENT_FLAGS_NO_CLIENTS)
+            usb_host_device_free_all();
+    }
+
+    usb_host_uninstall();
+    vTaskDelete(NULL);
+}
+
+/* --------------------------------------------------------------------------
+ * USB client task (core 0) — handles client events (connect/disconnect/xfer)
+ * -------------------------------------------------------------------------- */
+
+static void usb_client_event_cb(const usb_host_client_event_msg_t *msg, void *arg)
+{
+    /* Called from within usb_host_client_handle_events() context */
+    switch (msg->event) {
+    case USB_HOST_CLIENT_EVENT_NEW_DEV:
+        ESP_LOGI(TAG, "USB: new device addr=%d", msg->new_dev.address);
+        kbd_device_open(msg->new_dev.address);
+        break;
+    case USB_HOST_CLIENT_EVENT_DEV_GONE:
+        ESP_LOGI(TAG, "USB: device gone");
+        kbd_device_close();
+        break;
     default:
         break;
     }
 }
 
-/* --------------------------------------------------------------------------
- * USB host event processing task (core 0)
- * -------------------------------------------------------------------------- */
-
-static void usb_lib_task(void *arg)
+static void usb_client_task(void *arg)
 {
-    /* Signal that USB lib task is ready */
-    xTaskNotifyGive((TaskHandle_t)arg);
+    const usb_host_client_config_t client_cfg = {
+        .is_synchronous    = false,
+        .max_num_event_msg = 5,
+        .async = {
+            .client_event_callback = usb_client_event_cb,
+            .callback_arg          = NULL,
+        },
+    };
 
-    ESP_LOGI(TAG, "USB lib task running (core %d)", xPortGetCoreID());
-    int event_count = 0;
-    while (s_running) {
-        uint32_t event_flags;
-        esp_err_t err = usb_host_lib_handle_events(portMAX_DELAY, &event_flags);
-        event_count++;
-        ESP_LOGI(TAG, "USB lib event[%d]: flags=0x%08lx err=%s",
-                 event_count, (unsigned long)event_flags, esp_err_to_name(err));
-        if (event_flags & USB_HOST_LIB_EVENT_FLAGS_NO_CLIENTS) {
-            ESP_LOGI(TAG, "USB: no clients — freeing all devices");
-            usb_host_device_free_all();
-        }
-        if (event_flags & USB_HOST_LIB_EVENT_FLAGS_ALL_FREE) {
-            ESP_LOGI(TAG, "USB: all devices free");
-        }
+    if (usb_host_client_register(&client_cfg, &s_client_hdl) != ESP_OK) {
+        ESP_LOGE(TAG, "Cannot register USB client");
+        vTaskDelete(NULL);
+        return;
     }
 
-    /* Uninstall USB host lib before task exits */
-    usb_host_uninstall();
+    ESP_LOGI(TAG, "USB client task running");
+    xTaskNotifyGive((TaskHandle_t)arg);
+
+    while (s_running) {
+        usb_host_client_handle_events(s_client_hdl, pdMS_TO_TICKS(100));
+    }
+
+    kbd_device_close();
+    usb_host_client_deregister(s_client_hdl);
+    s_client_hdl = NULL;
     vTaskDelete(NULL);
 }
 
@@ -444,15 +599,13 @@ static void usb_lib_task(void *arg)
 esp_err_t mos_kbd_init(mos_kbd_scancode_cb_t cb)
 {
     if (!cb) return ESP_ERR_INVALID_ARG;
-    s_cb = cb;
+    s_cb      = cb;
     s_running = true;
+    memset(&s_dev, 0, sizeof(s_dev));
     s_prev_mod = 0;
-    memset(s_prev_keys, 0, sizeof(s_prev_keys));
+    memset(s_prev_keys, 0, 6);
 
-    /* 1. Assert hub reset (LOW) and hold while the USB host stack initialises.
-     * FE1.1s requires reset asserted for ≥1 ms.  We keep it asserted until
-     * the host stack is running so the hub only enumerates once the HCD is
-     * ready to handle the enumeration traffic. */
+    /* 1. Assert hub reset while host stack initialises */
     gpio_config_t io_conf = {
         .pin_bit_mask = (1ULL << CONFIG_MOS_KBD_HUB_RST_GPIO),
         .mode         = GPIO_MODE_OUTPUT,
@@ -462,59 +615,39 @@ esp_err_t mos_kbd_init(mos_kbd_scancode_cb_t cb)
     };
     gpio_config(&io_conf);
     ESP_LOGI(TAG, "Hub reset: asserting GPIO%d LOW", CONFIG_MOS_KBD_HUB_RST_GPIO);
-    gpio_set_level(CONFIG_MOS_KBD_HUB_RST_GPIO, 0);   /* assert reset */
+    gpio_set_level(CONFIG_MOS_KBD_HUB_RST_GPIO, 0);
 
-    /* 2. Install USB host library on PHY0 (peripheral_map = 0 → BIT0 → OTG20 HS)
-     * Dedicated UTMI pads — same PHY used by production test for HS pen drives. */
-    const usb_host_config_t host_config = {
-        .skip_phy_setup  = false,
-        .peripheral_map  = 0,         /* PHY0 = OTG20 HS (UTMI dedicated pads) */
-        .intr_flags      = ESP_INTR_FLAG_LEVEL1,
+    /* 2. Install USB host library */
+    const usb_host_config_t host_cfg = {
+        .skip_phy_setup = false,
+        .peripheral_map = 0,           /* PHY0 = OTG20 HS UTMI */
+        .intr_flags     = ESP_INTR_FLAG_LEVEL1,
     };
-    esp_err_t ret = usb_host_install(&host_config);
+    esp_err_t ret = usb_host_install(&host_cfg);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "USB host install failed: %s", esp_err_to_name(ret));
-        gpio_set_level(CONFIG_MOS_KBD_HUB_RST_GPIO, 1); /* release hub */
+        gpio_set_level(CONFIG_MOS_KBD_HUB_RST_GPIO, 1);
         return ret;
     }
 
-    /* 3. Start USB lib task on core 0, wait for it to be ready.
-     * Priority 10: matches Espressif reference BSP (usb_lib_task prio=10). */
+    /* 3. Start USB lib task, wait for ready */
     xTaskCreatePinnedToCore(usb_lib_task, "usb_lib", 4096,
-                            xTaskGetCurrentTaskHandle(), 10,
-                            &s_usb_lib_task, 0);
+                            xTaskGetCurrentTaskHandle(), 10, &s_lib_task, 0);
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 
-    /* 4. Install HID host driver (spawns its own background task on core 0) */
-    const hid_host_driver_config_t hid_config = {
-        .create_background_task = true,
-        .task_priority          = 5,
-        .stack_size             = 4096,
-        .core_id                = 0,
-        .callback               = hid_host_device_callback,
-        .callback_arg           = NULL,
-    };
-    ret = hid_host_install(&hid_config);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "HID host install failed: %s", esp_err_to_name(ret));
-        s_running = false;
-        gpio_set_level(CONFIG_MOS_KBD_HUB_RST_GPIO, 1); /* release hub */
-        /* usb_lib_task will call usb_host_uninstall and exit */
-        return ret;
-    }
+    /* 4. Start USB client task, wait for ready */
+    xTaskCreatePinnedToCore(usb_client_task, "usb_client", 4096,
+                            xTaskGetCurrentTaskHandle(), 5, &s_client_task, 0);
+    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 
-    /* 5. Now release the hub from reset.  The USB host stack is running and
-     * ready to enumerate.  The hub needs ~200 ms to complete its power-on
-     * sequence and present the downstream keyboard to the host. */
-    vTaskDelay(pdMS_TO_TICKS(50));                     /* ensure hub held reset ≥50 ms */
-    gpio_set_level(CONFIG_MOS_KBD_HUB_RST_GPIO, 1);   /* deassert reset */
-    ESP_LOGI(TAG, "Hub reset: deasserted — waiting 200ms for hub power-on sequence");
-    vTaskDelay(pdMS_TO_TICKS(200));                    /* FE1.1s needs ~200ms after reset */
-    ESP_LOGI(TAG, "Hub ready — USB host stack enumerating");
+    /* 5. Release hub from reset */
+    vTaskDelay(pdMS_TO_TICKS(50));
+    gpio_set_level(CONFIG_MOS_KBD_HUB_RST_GPIO, 1);
+    ESP_LOGI(TAG, "Hub released — waiting 200ms for enumeration");
+    vTaskDelay(pdMS_TO_TICKS(200));
 
-    ESP_LOGI(TAG, "USB HID keyboard driver started (OTG20 HS UTMI, HUB_RST# GPIO%d)",
+    ESP_LOGI(TAG, "USB HID keyboard driver started (PHY0 HS, HUB_RST# GPIO%d)",
              CONFIG_MOS_KBD_HUB_RST_GPIO);
-
     return ESP_OK;
 }
 
@@ -522,8 +655,7 @@ void mos_kbd_deinit(void)
 {
     s_running = false;
     s_cb = NULL;
-    hid_host_uninstall();
-    /* usb_lib_task detects s_running==false on next event and self-destructs */
+    if (s_client_hdl) usb_host_client_unblock(s_client_hdl);
 }
 
 #endif /* CONFIG_MOS_KBD_ENABLED */
