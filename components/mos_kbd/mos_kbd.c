@@ -207,7 +207,6 @@ static kbd_dev_t               s_dev         = { 0 };
 
 /* Previous HID report state for diff-based make/break detection */
 static uint8_t s_prev_mod     = 0;
-static uint8_t s_prev_keys[6] = {0};
 
 /* --------------------------------------------------------------------------
  * Scancode emission
@@ -253,41 +252,82 @@ static void emit_modifier_break(int bit)
  * HID report processing
  * -------------------------------------------------------------------------- */
 
+/* Previous bitmask state for bitmap-format reports (up to 120 keys) */
+static uint8_t s_prev_bitmap[15] = {0};
+
+/* Detect report format from the first report received:
+ *   BOOT:   len == 8, data[0] is modifier byte (0x00..0xFF modifier bits)
+ *   BITMAP: len  > 8, data[0] is a Report ID (non-modifier value)
+ *
+ * In BITMAP format (e.g. Report ID 0x0C, len=17):
+ *   data[0] = Report ID
+ *   data[1] = modifier byte (same bit layout as boot protocol)
+ *   data[2..len-1] = key bitmask: bit N of byte data[2 + N/8] = HID key N pressed
+ */
+typedef enum { FMT_UNKNOWN, FMT_BOOT, FMT_BITMAP } report_fmt_t;
+static report_fmt_t s_report_fmt = FMT_UNKNOWN;
+
 static void process_keyboard_report(const uint8_t *data, size_t len)
 {
     if (len < 3) return;
 
-    uint8_t mod  = data[0];
-    const uint8_t *keys = &data[2];
-    int nkeys = (int)(len - 2);
-    if (nkeys > 6) nkeys = 6;
+    /* Auto-detect format on first non-empty report */
+    if (s_report_fmt == FMT_UNKNOWN) {
+        /* Boot protocol: exactly 8 bytes; first byte is modifier (no Report ID) */
+        s_report_fmt = (len == 8) ? FMT_BOOT : FMT_BITMAP;
+        ESP_LOGI(TAG, "HID report format: %s (len=%u)",
+                 s_report_fmt == FMT_BOOT ? "boot(8-byte)" : "bitmap", (unsigned)len);
+    }
 
+    uint8_t mod;
+    const uint8_t *bitmap;
+    int bitmap_len;
+
+    if (s_report_fmt == FMT_BOOT) {
+        /* [mod][reserved][key0..key5] */
+        mod        = data[0];
+        /* boot protocol: convert 6-key array to a temporary bitmap for unified diff */
+        static uint8_t boot_bmap[15];
+        memset(boot_bmap, 0, sizeof(boot_bmap));
+        for (int i = 2; i < (int)len && i < 8; i++) {
+            uint8_t k = data[i];
+            if (k >= 4 && k < 120) boot_bmap[k / 8] |= (1u << (k % 8));
+        }
+        bitmap     = boot_bmap;
+        bitmap_len = 15;
+    } else {
+        /* [report_id][mod][bitmask...] */
+        mod        = data[1];
+        bitmap     = &data[2];
+        bitmap_len = (int)len - 2;
+        if (bitmap_len > 15) bitmap_len = 15;
+    }
+
+    /* Emit modifier make/break */
     uint8_t mod_pressed  = mod & ~s_prev_mod;
     uint8_t mod_released = s_prev_mod & ~mod;
     for (int bit = 0; bit < 8; bit++) {
         if (mod_pressed  & (1 << bit)) emit_modifier_make(bit);
         if (mod_released & (1 << bit)) emit_modifier_break(bit);
     }
-
-    for (int i = 0; i < nkeys; i++) {
-        uint8_t k = keys[i];
-        if (k < 4) continue;
-        bool was = false;
-        for (int j = 0; j < 6; j++) if (s_prev_keys[j] == k) { was = true; break; }
-        if (!was) emit_make(k);
-    }
-
-    for (int j = 0; j < 6; j++) {
-        uint8_t k = s_prev_keys[j];
-        if (k < 4) continue;
-        bool still = false;
-        for (int i = 0; i < nkeys; i++) if (keys[i] == k) { still = true; break; }
-        if (!still) emit_break(k);
-    }
-
     s_prev_mod = mod;
-    memset(s_prev_keys, 0, 6);
-    for (int i = 0; i < nkeys && i < 6; i++) s_prev_keys[i] = keys[i];
+
+    /* Diff current bitmap vs previous to emit make/break for each key */
+    for (int byte_i = 0; byte_i < bitmap_len; byte_i++) {
+        uint8_t cur  = bitmap[byte_i];
+        uint8_t prev = s_prev_bitmap[byte_i];
+        uint8_t changed = cur ^ prev;
+        if (!changed) continue;
+        for (int bit = 0; bit < 8; bit++) {
+            if (!(changed & (1 << bit))) continue;
+            uint8_t hid = byte_i * 8 + bit;
+            if (hid < 4) continue;  /* reserved / error codes */
+            if (cur & (1 << bit)) emit_make(hid);
+            else                   emit_break(hid);
+        }
+    }
+
+    memcpy(s_prev_bitmap, bitmap, bitmap_len);
 }
 
 /* --------------------------------------------------------------------------
@@ -491,7 +531,8 @@ static void kbd_device_open(uint8_t dev_addr)
     s_dev.active   = true;
 
     s_prev_mod = 0;
-    memset(s_prev_keys, 0, 6);
+    memset(s_prev_bitmap, 0, sizeof(s_prev_bitmap));
+    s_report_fmt = FMT_UNKNOWN;
 
     if (usb_host_transfer_submit(xfer) != ESP_OK) {
         ESP_LOGE(TAG, "Cannot submit interrupt transfer");
@@ -521,7 +562,8 @@ static void kbd_device_close(void)
         s_dev.dev_hdl = NULL;
     }
     s_prev_mod = 0;
-    memset(s_prev_keys, 0, 6);
+    memset(s_prev_bitmap, 0, sizeof(s_prev_bitmap));
+    s_report_fmt = FMT_UNKNOWN;
 }
 
 /* --------------------------------------------------------------------------
@@ -606,7 +648,8 @@ esp_err_t mos_kbd_init(mos_kbd_scancode_cb_t cb)
     s_running = true;
     memset(&s_dev, 0, sizeof(s_dev));
     s_prev_mod = 0;
-    memset(s_prev_keys, 0, 6);
+    memset(s_prev_bitmap, 0, sizeof(s_prev_bitmap));
+    s_report_fmt = FMT_UNKNOWN;
 
     /* 1. Assert hub reset while host stack initialises */
     gpio_config_t io_conf = {
