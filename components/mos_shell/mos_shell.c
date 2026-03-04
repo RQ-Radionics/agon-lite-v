@@ -341,7 +341,7 @@ int mos_exec(char *buffer)
         char interp[MOS_PATH_MAX];
         snprintf(name, sizeof(name), "%.*s", cmdLen, commandPtr);
 
-        const char *search[] = { mos_fs_getcwd(), MOS_SD_MOUNT, NULL };
+        const char *search[] = { mos_fs_getcwd(), MOS_SD_MOUNT "/bin", MOS_SD_MOUNT, NULL };
 
         /* 1. BBC BASIC script: <name>.bbc — run via bbcbasic.bin */
         char bbcname[68];
