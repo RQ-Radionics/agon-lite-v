@@ -171,7 +171,7 @@ static esp_lcd_panel_handle_t hdmi_init(void)
     ESP_LOGI(TAG, "HDMI: step 3 OK");
 
     /* 4. Create DPI panel — feeds pixel data from ESP32-P4 to LT8912B DSI input.
-     * 800x600 @ 40 MHz pixel clock, RGB888 (24-bit). Lane=896 (diagnostic test).
+     * 800x600 @ 40 MHz pixel clock, RGB888 (24-bit).
      *    VESA 800x600@60Hz timings:
      *      htotal=1056 (hfp=40 hs=128 hbp=88), vtotal=628 (vfp=1 vs=4 vbp=23)
      *      h_polarity=positive, v_polarity=positive
@@ -239,7 +239,7 @@ static esp_lcd_panel_handle_t hdmi_init(void)
     esp_lcd_panel_disp_on_off(panel, true);
     ESP_LOGI(TAG, "HDMI: step 5 OK");
 
-    ESP_LOGI(TAG, "HDMI: 800x600@60Hz ready (lane=896 test)%s",
+    ESP_LOGI(TAG, "HDMI: 800x600@60Hz ready%s",
              esp_lcd_lt8912b_is_connected() ? " (cable connected)" : " (no cable)");
     return panel;
 }

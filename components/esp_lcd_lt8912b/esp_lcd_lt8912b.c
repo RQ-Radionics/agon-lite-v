@@ -2,7 +2,7 @@
  * esp_lcd_lt8912b.c — Lontium LT8912B MIPI DSI → HDMI bridge driver
  *
  * Fixed output: 800×600@60Hz over HDMI.
- * DSI input:    2-lane RGB888, 896 Mbps per lane.
+ * DSI input:    2-lane RGB888, 530 Mbps per lane.
  *
  * Register sequence derived from upstream Linux kernel driver:
  *   drivers/gpu/drm/bridge/lontium-lt8912b.c  (torvalds/linux)
@@ -402,7 +402,7 @@ static esp_err_t lt8912b_init_common(int hpd_gpio)
     lt8912b_hpd_gpio_init(s_lt.hpd_gpio);
 
     s_lt.initialized = true;
-    ESP_LOGI(TAG, "LT8912B initialized — 800x600@60Hz HDMI output (lane=896 test)");
+    ESP_LOGI(TAG, "LT8912B initialized — 800x600@60Hz HDMI output");
 
     if (esp_lcd_lt8912b_is_connected()) {
         ESP_LOGI(TAG, "HDMI cable connected");
