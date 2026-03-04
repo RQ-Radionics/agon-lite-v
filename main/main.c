@@ -49,6 +49,7 @@
 
 #ifdef CONFIG_MOS_VDP_INTERNAL_ENABLED
 #include "mos_vdp_internal.h"
+#include "mos_audio_synth.h"
 #endif
 
 static const char *TAG = "esp32-mos";
@@ -378,6 +379,18 @@ static void mos_main_task(void *arg)
     if (mos_audio_init() != ESP_OK) {
 #  endif
         ESP_LOGW(TAG, "Audio init failed — continuing without audio");
+    }
+#endif
+
+    /* 1c2. Audio synthesizer — Agon 3-channel VDP audio engine.
+     *      Must be called after mos_audio_init() so the hardware is ready.
+     *      The synth task will sleep gracefully if mos_audio is unavailable. */
+#ifdef CONFIG_MOS_VDP_INTERNAL_ENABLED
+    {
+        esp_err_t synth_ret = mos_synth_init();
+        if (synth_ret != ESP_OK) {
+            ESP_LOGW(TAG, "Audio synth init failed (0x%x) — VDP audio disabled", synth_ret);
+        }
     }
 #endif
 

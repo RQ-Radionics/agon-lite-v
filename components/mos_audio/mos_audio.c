@@ -127,9 +127,13 @@ static esp_err_t audio_codec_init(i2c_master_bus_handle_t bus)
     s_spk_dev = esp_codec_dev_new(&dev_cfg);
     ESP_RETURN_ON_FALSE(s_spk_dev, ESP_ERR_NO_MEM, TAG, "esp_codec_dev_new");
 
+    /* Note: esp_codec_dev requires channel=2 (stereo) even though I2S is
+     * configured MONO — the codec abstraction layer uses channel count for
+     * buffer sizing internally.  The I2S slot mode (MONO) determines actual
+     * wire format; both channels carry the same mono sample. */
     esp_codec_dev_sample_info_t fs = {
         .sample_rate     = CONFIG_MOS_AUDIO_SAMPLE_RATE,
-        .channel         = 1,   /* mono */
+        .channel         = 2,
         .bits_per_sample = 16,
     };
     ESP_RETURN_ON_ERROR(
@@ -137,7 +141,8 @@ static esp_err_t audio_codec_init(i2c_master_bus_handle_t bus)
     ESP_RETURN_ON_ERROR(
         esp_codec_dev_set_out_vol(s_spk_dev, 70), TAG, "set_out_vol");
 
-    ESP_LOGI(TAG, "Audio initialized: %d Hz mono 16-bit", CONFIG_MOS_AUDIO_SAMPLE_RATE);
+    ESP_LOGI(TAG, "Audio initialized: %d Hz (stereo codec / mono I2S) 16-bit",
+             CONFIG_MOS_AUDIO_SAMPLE_RATE);
     return ESP_OK;
 }
 

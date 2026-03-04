@@ -374,7 +374,7 @@ esp_err_t mos_synth_init(void)
 
     BaseType_t ok = xTaskCreatePinnedToCore(
         synth_mixer_task, "synth_mix",
-        4096, NULL, 4, NULL, 1);
+        8192, NULL, 4, NULL, 1);
     if (ok != pdPASS) {
         ESP_LOGE(TAG, "Failed to create mixer task");
         s_synth_running = false;

@@ -1758,12 +1758,6 @@ esp_err_t mos_vdp_internal_init(esp_lcd_panel_handle_t dpi_panel)
         return ESP_ERR_NO_MEM;
     }
 
-    /* Start the audio synthesizer (non-fatal if mos_audio is not initialized) */
-    esp_err_t synth_ret = mos_synth_init();
-    if (synth_ret != ESP_OK) {
-        ESP_LOGW(TAG, "mos_synth_init failed (0x%x) — audio disabled", synth_ret);
-    }
-
     s_initialized = true;
     ESP_LOGI(TAG, "Internal VDP ready — fb=%dx%d mode=%dx%d scale=%d off=(%d,%d) (%d cols×%d rows)",
              FB_W, FB_H, s_mode_w, s_mode_h, s_scale, s_off_x, s_off_y, COLS, ROWS);
