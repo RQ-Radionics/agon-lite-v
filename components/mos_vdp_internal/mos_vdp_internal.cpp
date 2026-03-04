@@ -350,18 +350,9 @@ static esp_timer_handle_t s_flush_timer = NULL;
 
 static void fb_flush_timer_cb(void *arg)
 {
-    if (!s_fb_dirty) return;
-    if (!s_fb[0]) return;
-    s_fb_dirty = false;
-    /* The DPI controller reads s_fb[0] directly via DW-GDMA each vsync.
-     * We only need to writeback the CPU dcache to PSRAM so the DMA sees
-     * the latest pixels.  No draw_bitmap needed — that is only for
-     * external buffers.  Calling draw_bitmap from a timer ISR context
-     * while the render task also writes the FB causes DMA descriptor
-     * corruption.  esp_cache_msync C2M+UNALIGNED is safe from any task. */
-    esp_cache_msync(s_fb[0], FB_SIZE,
-        ESP_CACHE_MSYNC_FLAG_DIR_C2M |
-        ESP_CACHE_MSYNC_FLAG_UNALIGNED);
+    /* Just set the flag — the render task will do the actual draw_bitmap
+     * from its safe task context, avoiding any DMA race conditions. */
+    s_fb_dirty = true;
 }
 
 /* ------------------------------------------------------------------ */
@@ -450,11 +441,9 @@ static inline void fb_flush(void)
 
 static void fb_flush_now(void)
 {
-    if (!s_fb[0]) return;
+    if (!s_panel || !s_fb[0]) return;
     s_fb_dirty = false;
-    esp_cache_msync(s_fb[0], FB_SIZE,
-        ESP_CACHE_MSYNC_FLAG_DIR_C2M |
-        ESP_CACHE_MSYNC_FLAG_UNALIGNED);
+    esp_lcd_panel_draw_bitmap(s_panel, 0, 0, FB_W, FB_H, s_fb[0]);
 }
 
 /* ------------------------------------------------------------------ */
@@ -1244,15 +1233,21 @@ static QueueHandle_t s_key_queue = NULL;
 static void vdp_render_task(void *arg)
 {
     uint8_t byte;
-    bool first = true;
     while (1) {
-        if (xQueueReceive(s_vdu_queue, &byte, portMAX_DELAY) == pdTRUE) {
-            if (first && s_fb[0] && s_panel) {
-                first = false;
-                ESP_LOGI("vdp_int", "DIAG: first byte 0x%02X received", byte);
-            }
+        if (xQueueReceive(s_vdu_queue, &byte, pdMS_TO_TICKS(16)) == pdTRUE) {
             if (s_fb_mutex) xSemaphoreTake(s_fb_mutex, portMAX_DELAY);
             vdu_process(byte);
+            /* Drain the queue fully before flushing — avoids a draw_bitmap
+             * call per byte when thousands of PLOTs are in flight. */
+            while (xQueueReceive(s_vdu_queue, &byte, 0) == pdTRUE) {
+                vdu_process(byte);
+            }
+            if (s_fb_mutex) xSemaphoreGive(s_fb_mutex);
+        }
+        /* Flush at ~60Hz from task context — safe for draw_bitmap / DMA */
+        if (s_fb_dirty) {
+            if (s_fb_mutex) xSemaphoreTake(s_fb_mutex, portMAX_DELAY);
+            fb_flush_now();
             if (s_fb_mutex) xSemaphoreGive(s_fb_mutex);
         }
     }
