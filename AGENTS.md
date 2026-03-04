@@ -197,6 +197,17 @@ ample room in the 96KB remaining after init allocations.
   - VDU 23,0 sub-protocol: handshake (0x80), cursor pos (0x82), mode info (0x86)
   - VDU 23,0,0x85 audio protocol + sintetizador 3 canales (square/sine/triangle/sawtooth/noise)
   - synth_mixer_task stack 8192 bytes (sinf() soft-float requiere >4096)
+  - **PLOT coordinate system corregido** (commit bb608b3, sesión 6):
+    - Escala 1280×1024 OS units (no >>2): X/2.0, Y/2.133 para MODE 1 640×480
+    - Relative/absolute invertido: bit2=1 → absoluto (BBC Micro spec)
+    - Selección color: cmd&0x03 (no cmd&0x40); PLOT 69 colourMode=1 → fg
+    - Move-only (colourMode=0) no dibuja (commit d974969)
+  - **Flush desacoplado del PLOT** (commits 2710bcf→735d281, sesión 6):
+    - Cada PLOT solo marca s_fb_dirty=true; esp_timer a 60Hz también lo marca
+    - render task drena la cola VDU completa en inner loop, luego llama
+      draw_bitmap desde contexto de task (seguro para DW-GDMA)
+    - cache_msync directo desde timer/ISR corrompía LLIs del DW-GDMA
+      (Load access fault en dw_gdma_channel_default_isr)
 
 ### mos_kbd CMakeLists.txt note (learned this session)
 - `espressif__usb_host_hid` must be in `PRIV_REQUIRES` (not `REQUIRES`) because the
@@ -230,12 +241,10 @@ FAT partition. All files must be on SD card. `flash_data.sh` no longer needs to
 flash the storage partition (only the firmware binary).
 
 ### Next areas to work on
-- **Hardware test on Olimex**: verify HDMI, audio, keyboard now that the display-black
-  bug (caused by the proxy) should be gone
-- **`mos_vdp_internal`** — port console8 C++ VDP core as IDF component (esp32-mos-hfq)
-  - Once done, replace `mos_kbd_scancode_stub` in `main.c` with
-    `mos_vdp_internal_send_scancode()` — the stub is clearly marked with TODO comment
+- **`mos_vdp_internal`** — PLOT engine verificado y funcionando (hatgraph, mandelbrot, cube3d)
+  - Siguiente: buffered commands VDU 23,0,0xA0 (issue esp32-mos-29j.8)
 - **`mos_vdp` dual router** — TCP external / internal VDP (esp32-mos-edq)
 - I2C driver (issue esp32-mos-h4x)
 - More shell commands (TYPE, DEL, RENAME, COPY, CD, MKDIR)
+- USB SPLIT transactions para FS/LS devices via HS hub (esp32-mos-8pe)
 
