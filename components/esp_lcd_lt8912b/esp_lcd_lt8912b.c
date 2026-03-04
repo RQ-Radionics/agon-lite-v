@@ -1,16 +1,16 @@
 /*
  * esp_lcd_lt8912b.c — Lontium LT8912B MIPI DSI → HDMI bridge driver
  *
- * Fixed output: 640×480@60Hz over HDMI/DVI.
- * DSI input:    2-lane RGB888, 350 Mbps per lane.
+ * Fixed output: 1280×720@60Hz over HDMI/DVI.
+ * DSI input:    2-lane RGB888, 1000 Mbps per lane.
  *
  * Register sequence derived from upstream Linux kernel driver:
  *   drivers/gpu/drm/bridge/lontium-lt8912b.c  (torvalds/linux)
  *
- * VESA 640×480@60Hz timing:
- *   hact=640  htotal=800   hfp=8   hs=96   hbp=40
- *   vact=480  vtotal=525   vfp=33  vs=2    vbp=10
- *   pclk=25.175 MHz, hsync=neg, vsync=neg
+ * Olimex BSP-validated 1280×720@60Hz timing (production test uses this):
+ *   hact=1280 htotal=1440 hfp=48  hs=32  hbp=80
+ *   vact=720  vtotal=741  vfp=3   vs=5   vbp=13
+ *   pclk=64 MHz, hsync=positive, vsync=negative
  *
  * LT8912B I2C sub-addresses (all on the same bus):
  *   0x48 — main  (digital/analog init, HPD status, output path)
@@ -146,7 +146,7 @@ static esp_err_t lt8912b_write_mipi_basic(void)
     esp_err_t ret = ESP_OK;
 
     ESP_RETURN_ON_ERROR(lt_write(d, 0x10, 0x01), TAG, "mipi 0x10");
-    ESP_RETURN_ON_ERROR(lt_write(d, 0x11, 0x10), TAG, "mipi 0x11"); /* settle: Olimex BSP value for 1024×768 */
+    ESP_RETURN_ON_ERROR(lt_write(d, 0x11, 0x08), TAG, "mipi 0x11"); /* settle: Linux kernel default for 720p */
     ESP_RETURN_ON_ERROR(lt_write(d, 0x12, 0x04), TAG, "mipi 0x12");
     ESP_RETURN_ON_ERROR(lt_write(d, 0x13, 0x02), TAG, "mipi 0x13"); /* 0x02 = 2 lanes */
     ESP_RETURN_ON_ERROR(lt_write(d, 0x14, 0x00), TAG, "mipi 0x14");
@@ -157,12 +157,12 @@ static esp_err_t lt8912b_write_mipi_basic(void)
     return ret;
 }
 
-/* Step 3: Video timing — 1024×768@60Hz (ADDR_CEC_DSI = 0x49)
+/* Step 3: Video timing — 1280×720@60Hz (ADDR_CEC_DSI = 0x49)
  *
- * Olimex BSP-validated timings (NOT VESA — different htotal/vtotal/syncs):
- *   hact=1024 htotal=1184 hfp=48  hs=32  hbp=80
- *   vact=768  vtotal=790  vfp=3   vs=4   vbp=15
- *   pclk=56 MHz, hsync=positive (h_polarity=1), vsync=negative (v_polarity=0)
+ * Olimex BSP production-test validated timings:
+ *   hact=1280 htotal=1440 hfp=48  hs=32  hbp=80
+ *   vact=720  vtotal=741  vfp=3   vs=5   vbp=13
+ *   pclk=64 MHz, hsync=positive (h_polarity=1), vsync=negative (v_polarity=0)
  *
  * Sync polarity register 0xAB (ADDR_MAIN):
  *   bit1 = H polarity (1=positive), bit0 = V polarity (1=positive)
@@ -174,26 +174,26 @@ static esp_err_t lt8912b_write_video_timing(void)
 
     /* Sync widths */
     ESP_RETURN_ON_ERROR(lt_write(d, 0x18, 32),              TAG, "vt hs");
-    ESP_RETURN_ON_ERROR(lt_write(d, 0x19, 4),               TAG, "vt vs");
+    ESP_RETURN_ON_ERROR(lt_write(d, 0x19, 5),               TAG, "vt vs");
 
     /* H active */
-    ESP_RETURN_ON_ERROR(lt_write(d, 0x1C, 1024 & 0xFF),    TAG, "vt hact_l");
-    ESP_RETURN_ON_ERROR(lt_write(d, 0x1D, 1024 >> 8),      TAG, "vt hact_h");
+    ESP_RETURN_ON_ERROR(lt_write(d, 0x1C, 1280 & 0xFF),    TAG, "vt hact_l");
+    ESP_RETURN_ON_ERROR(lt_write(d, 0x1D, 1280 >> 8),      TAG, "vt hact_h");
 
     /* FIFO buffer length (fixed at 12) */
     ESP_RETURN_ON_ERROR(lt_write(d, 0x2F, 0x0C),            TAG, "vt fifo");
 
     /* H total */
-    ESP_RETURN_ON_ERROR(lt_write(d, 0x34, 1184 & 0xFF),    TAG, "vt htot_l");
-    ESP_RETURN_ON_ERROR(lt_write(d, 0x35, 1184 >> 8),      TAG, "vt htot_h");
+    ESP_RETURN_ON_ERROR(lt_write(d, 0x34, 1440 & 0xFF),    TAG, "vt htot_l");
+    ESP_RETURN_ON_ERROR(lt_write(d, 0x35, 1440 >> 8),      TAG, "vt htot_h");
 
     /* V total */
-    ESP_RETURN_ON_ERROR(lt_write(d, 0x36, 790 & 0xFF),     TAG, "vt vtot_l");
-    ESP_RETURN_ON_ERROR(lt_write(d, 0x37, 790 >> 8),       TAG, "vt vtot_h");
+    ESP_RETURN_ON_ERROR(lt_write(d, 0x36, 741 & 0xFF),     TAG, "vt vtot_l");
+    ESP_RETURN_ON_ERROR(lt_write(d, 0x37, 741 >> 8),       TAG, "vt vtot_h");
 
     /* VBP */
-    ESP_RETURN_ON_ERROR(lt_write(d, 0x38, 15 & 0xFF),      TAG, "vt vbp_l");
-    ESP_RETURN_ON_ERROR(lt_write(d, 0x39, 15 >> 8),        TAG, "vt vbp_h");
+    ESP_RETURN_ON_ERROR(lt_write(d, 0x38, 13 & 0xFF),      TAG, "vt vbp_l");
+    ESP_RETURN_ON_ERROR(lt_write(d, 0x39, 13 >> 8),        TAG, "vt vbp_h");
 
     /* VFP */
     ESP_RETURN_ON_ERROR(lt_write(d, 0x3A, 3 & 0xFF),       TAG, "vt vfp_l");
@@ -407,7 +407,7 @@ static esp_err_t lt8912b_init_common(bool hdmi_mode, int hpd_gpio)
     lt8912b_hpd_gpio_init(s_lt.hpd_gpio);
 
     s_lt.initialized = true;
-    ESP_LOGI(TAG, "LT8912B initialized — 1024x768@60Hz %s output",
+    ESP_LOGI(TAG, "LT8912B initialized — 1280x720@60Hz %s output",
              hdmi_mode ? "HDMI" : "DVI");
 
     if (esp_lcd_lt8912b_is_connected()) {

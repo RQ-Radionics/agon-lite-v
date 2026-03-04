@@ -50,8 +50,8 @@ static const char *TAG = "vdp_int";
 /* ------------------------------------------------------------------ */
 /* Screen geometry                                                      */
 /* ------------------------------------------------------------------ */
-#define FB_W            1024
-#define FB_H            768
+#define FB_W            1280
+#define FB_H            720
 #define FONT_W          8
 #define FONT_H          8
 #define BYTES_PER_PIX   3                     /* RGB888 */
