@@ -6,5 +6,7 @@ idf_component_register(
         log
         freertos
         usb
+    PRIV_REQUIRES
+        hal
 
 )

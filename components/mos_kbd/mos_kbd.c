@@ -38,6 +38,9 @@
 #include "usb/usb_host.h"
 #include "usb/usb_types_ch9.h"
 #include "usb/usb_helpers.h"
+#if CONFIG_IDF_TARGET_ESP32P4
+#include "hal/usb_dwc_ll.h"   /* USB_DWC_LL_GET_HW, hcfg_reg.fslssupp */
+#endif
 
 static const char *TAG = "mos_kbd";
 
@@ -629,6 +632,15 @@ esp_err_t mos_kbd_init(mos_kbd_scancode_cb_t cb)
         gpio_set_level(CONFIG_MOS_KBD_HUB_RST_GPIO, 1);
         return ret;
     }
+
+    /* 2b. Force FS-only mode: HCFG.FSLSSupp=1 prevents HS chirp during port
+     * reset. Hub operates as FS hub; downstream FS/LS devices work without
+     * SPLIT transactions. Must be set before hub reset is released (chirp
+     * happens during port reset). Sufficient for HID — 12 Mbps >> needed. */
+#if CONFIG_IDF_TARGET_ESP32P4
+    USB_DWC_LL_GET_HW(0)->hcfg_reg.fslssupp = 1;
+    ESP_LOGI(TAG, "USB: forced FS-only mode (HCFG.FSLSSupp=1)");
+#endif
 
     /* 3. Start USB lib task, wait for ready */
     xTaskCreatePinnedToCore(usb_lib_task, "usb_lib", 4096,
