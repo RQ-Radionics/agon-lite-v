@@ -251,11 +251,8 @@ int mos_loader_exec(const char *path, int argc, char **argv)
      * running deep-recursing interpreters (e.g. BBC BASIC bbeval/bbexec).
      * app_main blocks on a semaphore until the user program returns.
      *
-     * On ESP32-P4: start the flash_io proxy task first.  The proxy has an
-     * internal-DRAM stack and handles all FAT/VFS calls on behalf of the
-     * user_task (which runs with a PSRAM stack and cannot call flash I/O
-     * directly due to the IDF cache-utils assert). */
-    mos_flash_io_start();
+     * On ESP32-P4: flash_io_task was started once at boot in mos_main_task
+     * and runs for the entire session — no need to start/stop it here. */
 
     void *ibus_entry = dbus_to_ibus(s_exec_arena);
     mos_entry_t entry_fn = (mos_entry_t)ibus_entry;
@@ -271,7 +268,6 @@ int mos_loader_exec(const char *path, int argc, char **argv)
     };
     if (!args.done) {
         ESP_LOGE(TAG, "Failed to create semaphore");
-        mos_flash_io_stop();
         return -1;
     }
 
@@ -297,7 +293,6 @@ int mos_loader_exec(const char *path, int argc, char **argv)
         ESP_LOGE(TAG, "xTaskCreateWithCaps failed (%u KB %s stack)", USER_TASK_STACK_KB,
                  (USER_TASK_STACK_CAPS & MALLOC_CAP_SPIRAM) ? "PSRAM" : "internal");
         vSemaphoreDelete(args.done);
-        mos_flash_io_stop();
         return -1;
     }
 
@@ -317,8 +312,6 @@ int mos_loader_exec(const char *path, int argc, char **argv)
     }
     vSemaphoreDelete(args.done);
     vTaskDeleteWithCaps(task);
-
-    mos_flash_io_stop();
 
     int ret = args.retval;
     ESP_LOGI(TAG, "'%s' exited %d", resolved, ret);
