@@ -154,6 +154,151 @@ static void udg_reset_all(void)
     /* No need to clear the data — just clearing the defined bits is enough */
 }
 
+/* Graphics viewport — declared here so sprite engine can reference them */
+static int s_gvp_x0 = 0, s_gvp_y0 = 0;
+static int s_gvp_x1 = 639, s_gvp_y1 = 479;
+
+/* ================================================================== */
+/* Sprite / Bitmap engine  (VDU 23,27)                                */
+/*                                                                     */
+/* Bitmaps: up to 256 slots, RGBA8888, stored in PSRAM.               */
+/* Sprites: up to 64 entries; each sprite holds ≤8 frame pointers     */
+/*          into the bitmap table.  Render happens on every fb flush.  */
+/* ================================================================== */
+
+#define BITMAP_MAX      256
+#define SPRITE_MAX       64
+#define SPRITE_FRAMES    8    /* max frames per sprite */
+
+/* RGBA pixel (8 bits per channel, alpha=255 → opaque) */
+typedef struct { uint8_t r, g, b, a; } rgba_t;
+
+typedef struct {
+    uint8_t  *data;      /* PSRAM: w×h × 4 bytes RGBA8888, NULL = empty */
+    uint16_t  w, h;
+} bitmap_t;
+
+typedef struct {
+    uint8_t   frame_ids[SPRITE_FRAMES]; /* bitmap indices */
+    uint8_t   num_frames;
+    uint8_t   cur_frame;
+    int16_t   x, y;           /* position in logical pixels */
+    bool      visible;
+    uint8_t   paint_mode;     /* 0=opaque, 1=transparent(alpha) */
+} sprite_t;
+
+static bitmap_t  s_bitmaps[BITMAP_MAX];
+static sprite_t  s_sprites[SPRITE_MAX];
+static uint8_t   s_num_active_sprites = 0; /* sprites 0..n-1 are on-stage */
+static uint8_t   s_cur_bitmap  = 0;
+static uint8_t   s_cur_sprite  = 0;
+
+/* ------ bitmap helpers ------ */
+
+static void bitmap_free(uint8_t id)
+{
+    if (s_bitmaps[id].data) {
+        heap_caps_free(s_bitmaps[id].data);
+        s_bitmaps[id].data = NULL;
+    }
+    s_bitmaps[id].w = 0;
+    s_bitmaps[id].h = 0;
+}
+
+/* Allocate/reallocate bitmap data in PSRAM */
+static bool bitmap_alloc(uint8_t id, uint16_t w, uint16_t h)
+{
+    bitmap_free(id);
+    uint32_t bytes = (uint32_t)w * h * 4;
+    if (bytes == 0) return false;
+    s_bitmaps[id].data = (uint8_t *)heap_caps_malloc(bytes, MALLOC_CAP_SPIRAM);
+    if (!s_bitmaps[id].data) {
+        ESP_LOGW(TAG, "bitmap_alloc: PSRAM alloc failed (%ux%u)", w, h);
+        return false;
+    }
+    s_bitmaps[id].w = w;
+    s_bitmaps[id].h = h;
+    return true;
+}
+
+/* Blit bitmap to the active framebuffer at logical position (bx,by).
+ * Clips to the current graphics viewport.
+ * paint_mode 0 = opaque (ignore alpha), 1 = alpha-blend. */
+static void bitmap_draw_to_fb(uint8_t *fb, uint8_t id, int bx, int by, uint8_t paint_mode)
+{
+    if (!s_bitmaps[id].data) return;
+    uint16_t bw = s_bitmaps[id].w;
+    uint16_t bh = s_bitmaps[id].h;
+    const rgba_t *src = (const rgba_t *)s_bitmaps[id].data;
+
+    for (int row = 0; row < (int)bh; row++) {
+        int ly = by + row;
+        if (ly < s_gvp_y0 || ly > s_gvp_y1) continue;
+        int py = ly * s_scale + s_off_y;
+        if (py < 0 || py >= FB_H) continue;
+
+        for (int col = 0; col < (int)bw; col++) {
+            int lx = bx + col;
+            if (lx < s_gvp_x0 || lx > s_gvp_x1) continue;
+            int px = lx * s_scale + s_off_x;
+            if (px < 0 || px >= FB_W) continue;
+
+            rgba_t p = src[row * bw + col];
+
+            for (int sy = 0; sy < s_scale; sy++) {
+                for (int sx = 0; sx < s_scale; sx++) {
+                    int fpx = px + sx;
+                    int fpy = py + sy;
+                    if (fpx >= FB_W || fpy >= FB_H) continue;
+                    uint8_t *dst = fb + (fpy * FB_W + fpx) * BYTES_PER_PIX;
+
+                    if (paint_mode == 0 || p.a == 255) {
+                        /* opaque */
+                        dst[0] = p.r; dst[1] = p.g; dst[2] = p.b;
+                    } else if (p.a > 0) {
+                        /* alpha blend */
+                        uint16_t a = p.a;
+                        dst[0] = (uint8_t)((dst[0] * (255-a) + p.r * a) >> 8);
+                        dst[1] = (uint8_t)((dst[1] * (255-a) + p.g * a) >> 8);
+                        dst[2] = (uint8_t)((dst[2] * (255-a) + p.b * a) >> 8);
+                    }
+                    /* a==0 → fully transparent, skip */
+                }
+            }
+        }
+    }
+}
+
+/* Render all active sprites onto fb (called from render task before flip) */
+static void sprites_render(uint8_t *fb)
+{
+    for (int i = 0; i < (int)s_num_active_sprites; i++) {
+        sprite_t *sp = &s_sprites[i];
+        if (!sp->visible || sp->num_frames == 0) continue;
+        uint8_t bid = sp->frame_ids[sp->cur_frame];
+        bitmap_draw_to_fb(fb, bid, sp->x, sp->y, sp->paint_mode);
+    }
+}
+
+static void sprites_reset_all(void)
+{
+    for (int i = 0; i < SPRITE_MAX; i++) {
+        s_sprites[i].num_frames  = 0;
+        s_sprites[i].cur_frame   = 0;
+        s_sprites[i].visible     = false;
+        s_sprites[i].x = s_sprites[i].y = 0;
+        s_sprites[i].paint_mode  = 1; /* default: alpha-blend */
+    }
+    s_num_active_sprites = 0;
+    s_cur_sprite = 0;
+}
+
+static void bitmaps_reset_all(void)
+{
+    for (int i = 0; i < BITMAP_MAX; i++) bitmap_free(i);
+    s_cur_bitmap = 0;
+}
+
 /* ------------------------------------------------------------------ */
 /* Framebuffer state                                                    */
 /* ------------------------------------------------------------------ */
@@ -185,9 +330,8 @@ static inline rgb888_t apply_gcol_mode(int mode, rgb888_t dst, rgb888_t src)
 static int s_gfx_x = 0, s_gfx_y = 0;   /* last graphics cursor (logical) */
 static int s_gfx_x_prev = 0, s_gfx_y_prev = 0;
 
-/* Graphics viewport in logical pixels (inclusive) */
-static int s_gvp_x0 = 0, s_gvp_y0 = 0;
-static int s_gvp_x1 = 639, s_gvp_y1 = 479;  /* updated on mode change / VDU 24 */
+/* Graphics viewport in logical pixels (inclusive) — also used by sprite engine */
+/* declared early (before sprite engine) to avoid forward-reference errors */
 
 /* Graphics origin */
 static int s_gfx_origin_x = 0, s_gfx_origin_y = 0;
@@ -241,6 +385,10 @@ static void fb_plot_pixel(int x, int y, rgb888_t c, int gcol_mode = 0)
 static void fb_flush(void)
 {
     if (!s_panel || !s_fb[0]) return;
+    /* Render active sprites on top of the framebuffer before DMA transfer */
+    if (s_num_active_sprites > 0) {
+        sprites_render(s_fb[0]);
+    }
     esp_lcd_panel_draw_bitmap(s_panel, 0, 0, FB_W, FB_H, s_fb[0]);
 }
 
@@ -876,6 +1024,42 @@ typedef enum {
     /* VDU 23,n (UDG redefine, n=32..255) — collect 8 bitmap bytes */
     VDU_STATE_VDU23_UDG,
 
+    /* VDU 23,27 — sprite/bitmap engine */
+    VDU_STATE_VDU23_27_CMD,    /* sub-command byte */
+    VDU_STATE_VDU23_27_0,      /* cmd 0: bitmap select (1 byte) */
+    VDU_STATE_VDU23_27_1_W0,   /* cmd 1: create bitmap from stream — w lo */
+    VDU_STATE_VDU23_27_1_W1,   /* w hi */
+    VDU_STATE_VDU23_27_1_H0,   /* h lo */
+    VDU_STATE_VDU23_27_1_H1,   /* h hi — then receive w*h*4 RGBA bytes */
+    VDU_STATE_VDU23_27_1_DATA, /* streaming pixel data */
+    VDU_STATE_VDU23_27_2_W0,   /* cmd 2: solid-colour bitmap — w lo */
+    VDU_STATE_VDU23_27_2_W1,
+    VDU_STATE_VDU23_27_2_H0,
+    VDU_STATE_VDU23_27_2_H1,
+    VDU_STATE_VDU23_27_2_COL0, /* 4-byte RGBA colour */
+    VDU_STATE_VDU23_27_2_COL1,
+    VDU_STATE_VDU23_27_2_COL2,
+    VDU_STATE_VDU23_27_2_COL3,
+    VDU_STATE_VDU23_27_3_X0,   /* cmd 3: draw bitmap — x lo */
+    VDU_STATE_VDU23_27_3_X1,
+    VDU_STATE_VDU23_27_3_Y0,
+    VDU_STATE_VDU23_27_3_Y1,
+    VDU_STATE_VDU23_27_4,      /* cmd 4: sprite select (1 byte) */
+    VDU_STATE_VDU23_27_6,      /* cmd 6: add frame (1 byte bitmap id) */
+    VDU_STATE_VDU23_27_7,      /* cmd 7: activate sprites (1 byte count) */
+    VDU_STATE_VDU23_27_10,     /* cmd 10: set frame (1 byte) */
+    VDU_STATE_VDU23_27_13_X0,  /* cmd 13: move sprite to x,y */
+    VDU_STATE_VDU23_27_13_X1,
+    VDU_STATE_VDU23_27_13_Y0,
+    VDU_STATE_VDU23_27_13_Y1,
+    VDU_STATE_VDU23_27_14_X0,  /* cmd 14: move sprite by dx,dy */
+    VDU_STATE_VDU23_27_14_X1,
+    VDU_STATE_VDU23_27_14_Y0,
+    VDU_STATE_VDU23_27_14_Y1,
+    VDU_STATE_VDU23_27_18,     /* cmd 18: set paint mode (1 byte) */
+    VDU_STATE_VDU23_27_21,     /* cmd 21: replace frame (1 byte) */
+    VDU_STATE_VDU23_27_SKIP,   /* consume remaining bytes of unknown cmd */
+
     /* VDU 24 — graphics viewport (8 bytes: x0lo,x0hi,y0lo,y0hi, x1lo,x1hi,y1lo,y1hi) */
     VDU_STATE_VDU24_1, VDU_STATE_VDU24_2, VDU_STATE_VDU24_3, VDU_STATE_VDU24_4,
     VDU_STATE_VDU24_5, VDU_STATE_VDU24_6, VDU_STATE_VDU24_7, VDU_STATE_VDU24_8,
@@ -998,6 +1182,8 @@ static void mode_set(uint8_t mode)
     s_gfx_origin_x = 0; s_gfx_origin_y = 0;
     s_gfx_x = 0; s_gfx_y = 0;
     udg_reset_all();
+    sprites_reset_all();
+    bitmaps_reset_all();
     clear_screen();
     s_col = 0; s_row = 0;
     fb_flush();
@@ -1214,11 +1400,8 @@ static void vdu_process(uint8_t c)
             s_vdu_skip = 1;
             s_vdu_state = VDU_STATE_VDU23_SKIP;
         } else if (c == 27) {
-            /* VDU 23,27 — sprites: very long variable protocol, just skip */
-            /* We skip 9 bytes (a safe minimum for most sub-commands) */
-            /* TODO: implement sprite engine */
-            s_vdu_skip = 9;
-            s_vdu_state = VDU_STATE_VDU23_SKIP;
+            /* VDU 23,27 — sprite/bitmap engine */
+            s_vdu_state = VDU_STATE_VDU23_27_CMD;
         } else if (c >= 32) {
             /* VDU 23,n — UDG redefine (n=32..255): collect 8 bytes */
             s_udg_char = c;
@@ -1451,6 +1634,246 @@ static void vdu_process(uint8_t c)
             if (s_udg) udg_set_defined(s_udg_char);
             s_vdu_state = VDU_STATE_NORMAL;
         }
+        break;
+
+    /* ================================================================
+     * VDU 23,27 — Sprite / Bitmap engine
+     * ================================================================ */
+
+    /* Sub-command dispatcher */
+    case VDU_STATE_VDU23_27_CMD:
+        s_arg[0] = c;   /* save sub-command for multi-byte states */
+        s_arg_idx = 0;
+        switch (c) {
+        case 0:    s_vdu_state = VDU_STATE_VDU23_27_0;      break; /* select bitmap */
+        case 1:    s_vdu_state = VDU_STATE_VDU23_27_1_W0;   break; /* create bitmap from stream */
+        case 2:    s_vdu_state = VDU_STATE_VDU23_27_2_W0;   break; /* create solid-colour bitmap */
+        case 3:    s_vdu_state = VDU_STATE_VDU23_27_3_X0;   break; /* draw bitmap at x,y */
+        case 4:    s_vdu_state = VDU_STATE_VDU23_27_4;      break; /* select sprite */
+        case 5:    /* clear sprite frames (no params) */
+            if (s_cur_sprite < SPRITE_MAX) {
+                s_sprites[s_cur_sprite].num_frames = 0;
+                s_sprites[s_cur_sprite].cur_frame  = 0;
+                s_sprites[s_cur_sprite].visible    = false;
+            }
+            s_vdu_state = VDU_STATE_NORMAL;
+            break;
+        case 6:    s_vdu_state = VDU_STATE_VDU23_27_6;      break; /* add frame */
+        case 7:    s_vdu_state = VDU_STATE_VDU23_27_7;      break; /* activate sprites */
+        case 8:    /* next frame */
+            if (s_cur_sprite < SPRITE_MAX) {
+                sprite_t *sp = &s_sprites[s_cur_sprite];
+                if (sp->num_frames > 0)
+                    sp->cur_frame = (uint8_t)((sp->cur_frame + 1) % sp->num_frames);
+            }
+            s_vdu_state = VDU_STATE_NORMAL;
+            break;
+        case 9:    /* previous frame */
+            if (s_cur_sprite < SPRITE_MAX) {
+                sprite_t *sp = &s_sprites[s_cur_sprite];
+                if (sp->num_frames > 0)
+                    sp->cur_frame = (uint8_t)(sp->cur_frame ? sp->cur_frame - 1 : sp->num_frames - 1);
+            }
+            s_vdu_state = VDU_STATE_NORMAL;
+            break;
+        case 10:   s_vdu_state = VDU_STATE_VDU23_27_10;     break; /* set frame id */
+        case 11:   /* show sprite */
+            if (s_cur_sprite < SPRITE_MAX) s_sprites[s_cur_sprite].visible = true;
+            s_vdu_state = VDU_STATE_NORMAL;
+            break;
+        case 12:   /* hide sprite */
+            if (s_cur_sprite < SPRITE_MAX) s_sprites[s_cur_sprite].visible = false;
+            s_vdu_state = VDU_STATE_NORMAL;
+            break;
+        case 13:   s_vdu_state = VDU_STATE_VDU23_27_13_X0;  break; /* move to x,y */
+        case 14:   s_vdu_state = VDU_STATE_VDU23_27_14_X0;  break; /* move by dx,dy */
+        case 15:   /* refresh — nothing to do (render happens each frame) */
+            s_vdu_state = VDU_STATE_NORMAL;
+            break;
+        case 16:   /* reset sprites + bitmaps + CLS */
+            sprites_reset_all();
+            bitmaps_reset_all();
+            s_vdu_state = VDU_STATE_NORMAL;
+            break;
+        case 17:   /* reset sprites only */
+            sprites_reset_all();
+            s_vdu_state = VDU_STATE_NORMAL;
+            break;
+        case 18:   s_vdu_state = VDU_STATE_VDU23_27_18;     break; /* set paint mode */
+        case 19:   /* set hardware sprite — no-op (software only) */
+        case 20:   /* set software sprite — no-op */
+            s_vdu_state = VDU_STATE_NORMAL;
+            break;
+        case 21:   s_vdu_state = VDU_STATE_VDU23_27_21;     break; /* replace frame */
+        case 0x20: /* select bitmap 16-bit — reuse s_arg, next byte is lo */
+            s_vdu_state = VDU_STATE_VDU23_27_0;  /* 1-byte (lo); hi ignored */
+            break;
+        default:
+            /* Unknown — skip 4 bytes (safe minimum for any 2-word args) */
+            s_vdu_skip = 4;
+            s_vdu_state = VDU_STATE_VDU23_27_SKIP;
+            break;
+        }
+        break;
+
+    /* cmd 0: select bitmap (1 byte) */
+    case VDU_STATE_VDU23_27_0:
+        s_cur_bitmap = c;
+        ESP_LOGD(TAG, "spr: bitmap %d selected", s_cur_bitmap);
+        s_vdu_state = VDU_STATE_NORMAL;
+        break;
+
+    /* cmd 1: create bitmap from RGBA stream — w lo,hi, h lo,hi, then w*h*4 bytes */
+    case VDU_STATE_VDU23_27_1_W0: s_arg[1]=c; s_vdu_state = VDU_STATE_VDU23_27_1_W1; break;
+    case VDU_STATE_VDU23_27_1_W1: s_arg[2]=c; s_vdu_state = VDU_STATE_VDU23_27_1_H0; break;
+    case VDU_STATE_VDU23_27_1_H0: s_arg[3]=c; s_vdu_state = VDU_STATE_VDU23_27_1_H1; break;
+    case VDU_STATE_VDU23_27_1_H1: {
+        uint16_t bw = (uint16_t)(s_arg[1] | (s_arg[2] << 8));
+        uint16_t bh = (uint16_t)(s_arg[3] | (c       << 8));
+        if (bh == 0) {
+            /* h=0: capture from screen — not yet implemented, skip */
+            s_vdu_state = VDU_STATE_NORMAL;
+        } else if (bitmap_alloc(s_cur_bitmap, bw, bh)) {
+            s_arg_idx = 0;   /* byte counter within pixel data */
+            /* store total bytes to receive in s_vdu_skip (repurposed) */
+            s_vdu_skip = (int)((uint32_t)bw * bh * 4);
+            s_vdu_state = VDU_STATE_VDU23_27_1_DATA;
+            ESP_LOGD(TAG, "spr: receiving bitmap %d %ux%u (%d bytes)",
+                     s_cur_bitmap, bw, bh, s_vdu_skip);
+        } else {
+            /* alloc failed — skip the data stream */
+            s_vdu_skip = (int)((uint32_t)bw * bh * 4);
+            s_vdu_state = VDU_STATE_VDU23_27_SKIP;
+        }
+        break;
+    }
+    case VDU_STATE_VDU23_27_1_DATA:
+        s_bitmaps[s_cur_bitmap].data[s_arg_idx++] = c;
+        s_vdu_skip--;
+        if (s_vdu_skip == 0) {
+            ESP_LOGD(TAG, "spr: bitmap %d received OK", s_cur_bitmap);
+            s_vdu_state = VDU_STATE_NORMAL;
+        }
+        break;
+
+    /* cmd 2: solid-colour bitmap — w lo,hi, h lo,hi, then 4 RGBA bytes */
+    case VDU_STATE_VDU23_27_2_W0: s_arg[1]=c; s_vdu_state = VDU_STATE_VDU23_27_2_W1; break;
+    case VDU_STATE_VDU23_27_2_W1: s_arg[2]=c; s_vdu_state = VDU_STATE_VDU23_27_2_H0; break;
+    case VDU_STATE_VDU23_27_2_H0: s_arg[3]=c; s_vdu_state = VDU_STATE_VDU23_27_2_H1; break;
+    case VDU_STATE_VDU23_27_2_H1: s_arg[4]=c; s_vdu_state = VDU_STATE_VDU23_27_2_COL0; break;
+    case VDU_STATE_VDU23_27_2_COL0: s_arg[5]=c; s_vdu_state = VDU_STATE_VDU23_27_2_COL1; break;
+    case VDU_STATE_VDU23_27_2_COL1: s_arg[6]=c; s_vdu_state = VDU_STATE_VDU23_27_2_COL2; break;
+    case VDU_STATE_VDU23_27_2_COL2: s_arg[7]=c; s_vdu_state = VDU_STATE_VDU23_27_2_COL3; break;
+    case VDU_STATE_VDU23_27_2_COL3: {
+        uint16_t bw = (uint16_t)(s_arg[1] | (s_arg[2] << 8));
+        uint16_t bh = (uint16_t)(s_arg[3] | (s_arg[4] << 8));
+        rgba_t   col = { s_arg[5], s_arg[6], s_arg[7], c };
+        if (bitmap_alloc(s_cur_bitmap, bw, bh)) {
+            rgba_t *p = (rgba_t *)s_bitmaps[s_cur_bitmap].data;
+            uint32_t n = (uint32_t)bw * bh;
+            for (uint32_t i = 0; i < n; i++) p[i] = col;
+            ESP_LOGD(TAG, "spr: solid bitmap %d %ux%u rgba(%d,%d,%d,%d)",
+                     s_cur_bitmap, bw, bh, col.r, col.g, col.b, col.a);
+        }
+        s_vdu_state = VDU_STATE_NORMAL;
+        break;
+    }
+
+    /* cmd 3: draw current bitmap at logical x,y (2+2 signed words) */
+    case VDU_STATE_VDU23_27_3_X0: s_arg[1]=c; s_vdu_state = VDU_STATE_VDU23_27_3_X1; break;
+    case VDU_STATE_VDU23_27_3_X1: s_arg[2]=c; s_vdu_state = VDU_STATE_VDU23_27_3_Y0; break;
+    case VDU_STATE_VDU23_27_3_Y0: s_arg[3]=c; s_vdu_state = VDU_STATE_VDU23_27_3_Y1; break;
+    case VDU_STATE_VDU23_27_3_Y1: {
+        int bx = (int16_t)(s_arg[1] | (s_arg[2] << 8));
+        int by = (int16_t)(s_arg[3] | (c        << 8));
+        if (xSemaphoreTake(s_fb_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+            uint8_t *fb = s_fb[0];  /* draw to back buffer */
+            if (fb) bitmap_draw_to_fb(fb, s_cur_bitmap, bx, by, 1);
+            xSemaphoreGive(s_fb_mutex);
+        }
+        ESP_LOGD(TAG, "spr: draw bitmap %d at (%d,%d)", s_cur_bitmap, bx, by);
+        s_vdu_state = VDU_STATE_NORMAL;
+        break;
+    }
+
+    /* cmd 4: select sprite (1 byte) */
+    case VDU_STATE_VDU23_27_4:
+        s_cur_sprite = (c < SPRITE_MAX) ? c : 0;
+        ESP_LOGD(TAG, "spr: sprite %d selected", s_cur_sprite);
+        s_vdu_state = VDU_STATE_NORMAL;
+        break;
+
+    /* cmd 6: add bitmap as next frame of current sprite (1 byte bitmap id) */
+    case VDU_STATE_VDU23_27_6: {
+        sprite_t *sp = &s_sprites[s_cur_sprite < SPRITE_MAX ? s_cur_sprite : 0];
+        if (sp->num_frames < SPRITE_FRAMES) {
+            sp->frame_ids[sp->num_frames++] = c;
+            ESP_LOGD(TAG, "spr: sprite %d add frame bitmap %d (total %d)",
+                     s_cur_sprite, c, sp->num_frames);
+        }
+        s_vdu_state = VDU_STATE_NORMAL;
+        break;
+    }
+
+    /* cmd 7: activate N sprites (1 byte) */
+    case VDU_STATE_VDU23_27_7:
+        s_num_active_sprites = (c <= SPRITE_MAX) ? c : SPRITE_MAX;
+        ESP_LOGD(TAG, "spr: %d sprites activated", s_num_active_sprites);
+        s_vdu_state = VDU_STATE_NORMAL;
+        break;
+
+    /* cmd 10: set frame id on current sprite (1 byte) */
+    case VDU_STATE_VDU23_27_10: {
+        sprite_t *sp = &s_sprites[s_cur_sprite < SPRITE_MAX ? s_cur_sprite : 0];
+        if (c < sp->num_frames) sp->cur_frame = c;
+        s_vdu_state = VDU_STATE_NORMAL;
+        break;
+    }
+
+    /* cmd 13: move sprite to absolute position (2 signed words) */
+    case VDU_STATE_VDU23_27_13_X0: s_arg[1]=c; s_vdu_state = VDU_STATE_VDU23_27_13_X1; break;
+    case VDU_STATE_VDU23_27_13_X1: s_arg[2]=c; s_vdu_state = VDU_STATE_VDU23_27_13_Y0; break;
+    case VDU_STATE_VDU23_27_13_Y0: s_arg[3]=c; s_vdu_state = VDU_STATE_VDU23_27_13_Y1; break;
+    case VDU_STATE_VDU23_27_13_Y1: {
+        sprite_t *sp = &s_sprites[s_cur_sprite < SPRITE_MAX ? s_cur_sprite : 0];
+        sp->x = (int16_t)(s_arg[1] | (s_arg[2] << 8));
+        sp->y = (int16_t)(s_arg[3] | (c        << 8));
+        ESP_LOGD(TAG, "spr: sprite %d move to (%d,%d)", s_cur_sprite, sp->x, sp->y);
+        s_vdu_state = VDU_STATE_NORMAL;
+        break;
+    }
+
+    /* cmd 14: move sprite by relative offset (2 signed words) */
+    case VDU_STATE_VDU23_27_14_X0: s_arg[1]=c; s_vdu_state = VDU_STATE_VDU23_27_14_X1; break;
+    case VDU_STATE_VDU23_27_14_X1: s_arg[2]=c; s_vdu_state = VDU_STATE_VDU23_27_14_Y0; break;
+    case VDU_STATE_VDU23_27_14_Y0: s_arg[3]=c; s_vdu_state = VDU_STATE_VDU23_27_14_Y1; break;
+    case VDU_STATE_VDU23_27_14_Y1: {
+        sprite_t *sp = &s_sprites[s_cur_sprite < SPRITE_MAX ? s_cur_sprite : 0];
+        sp->x = (int16_t)(sp->x + (int16_t)(s_arg[1] | (s_arg[2] << 8)));
+        sp->y = (int16_t)(sp->y + (int16_t)(s_arg[3] | (c        << 8)));
+        ESP_LOGD(TAG, "spr: sprite %d move by to (%d,%d)", s_cur_sprite, sp->x, sp->y);
+        s_vdu_state = VDU_STATE_NORMAL;
+        break;
+    }
+
+    /* cmd 18: set paint mode (0=opaque, 1=alpha-blend) */
+    case VDU_STATE_VDU23_27_18:
+        if (s_cur_sprite < SPRITE_MAX) s_sprites[s_cur_sprite].paint_mode = c & 1;
+        s_vdu_state = VDU_STATE_NORMAL;
+        break;
+
+    /* cmd 21: replace current frame with bitmap (1 byte) */
+    case VDU_STATE_VDU23_27_21: {
+        sprite_t *sp = &s_sprites[s_cur_sprite < SPRITE_MAX ? s_cur_sprite : 0];
+        if (sp->num_frames > 0) sp->frame_ids[sp->cur_frame] = c;
+        s_vdu_state = VDU_STATE_NORMAL;
+        break;
+    }
+
+    /* catch-all skip for unimplemented sub-commands */
+    case VDU_STATE_VDU23_27_SKIP:
+        s_vdu_skip--;
+        if (s_vdu_skip == 0) s_vdu_state = VDU_STATE_NORMAL;
         break;
 
     /* ================================================================
