@@ -237,7 +237,7 @@ static esp_lcd_panel_handle_t hdmi_init(void)
     esp_lcd_panel_disp_on_off(panel, true);
     ESP_LOGI(TAG, "HDMI: step 5 OK");
 
-    ESP_LOGI(TAG, "HDMI: 800x600@60Hz ready%s",
+    ESP_LOGI(TAG, "HDMI: 1024x768@60Hz ready%s",
              esp_lcd_lt8912b_is_connected() ? " (cable connected)" : " (no cable)");
     return panel;
 }
