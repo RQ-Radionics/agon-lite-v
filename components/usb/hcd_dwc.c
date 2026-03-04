@@ -776,6 +776,7 @@ static usb_speed_t get_usb_port_speed(usb_dwc_speed_t priv)
 static hcd_port_event_t _intr_hdlr_hprt(port_t *port, usb_dwc_hal_port_event_t hal_port_event, bool *yield)
 {
     hcd_port_event_t port_event = HCD_PORT_EVENT_NONE;
+    ESP_EARLY_LOGI(HCD_DWC_TAG, "HAL port event: %d", (int)hal_port_event);
     switch (hal_port_event) {
     case USB_DWC_HAL_PORT_EVENT_CONN: {
         // Don't update state immediately, we still need to debounce.
@@ -1172,6 +1173,7 @@ static bool _port_debounce(port_t *port)
     HCD_ENTER_CRITICAL();
     // Check the post-debounce state of the bus (i.e., whether it's actually connected/disconnected)
     bool is_connected = usb_dwc_hal_port_check_if_connected(port->hal);
+    ESP_LOGI(HCD_DWC_TAG, "_port_debounce: is_connected=%d", (int)is_connected);
     if (is_connected) {
         port->state = HCD_PORT_STATE_DISABLED;
     } else {
@@ -1457,6 +1459,8 @@ esp_err_t hcd_port_command(hcd_port_handle_t port_hdl, hcd_port_cmd_t command)
 {
     esp_err_t ret = ESP_ERR_INVALID_STATE;
     port_t *port = (port_t *)port_hdl;
+    ESP_LOGI(HCD_DWC_TAG, "hcd_port_command: cmd=%d state=%d event_pending=%d",
+             (int)command, (int)port->state, (int)port->flags.event_pending);
     xSemaphoreTake(port->port_mux, portMAX_DELAY);
     HCD_ENTER_CRITICAL();
     if (port->initialized && !port->flags.event_pending) { // Port events need to be handled first before issuing a command
@@ -1491,6 +1495,8 @@ esp_err_t hcd_port_command(hcd_port_handle_t port_hdl, hcd_port_cmd_t command)
     }
     HCD_EXIT_CRITICAL();
     xSemaphoreGive(port->port_mux);
+    ESP_LOGI(HCD_DWC_TAG, "hcd_port_command: cmd=%d ret=%s new_state=%d",
+             (int)command, esp_err_to_name(ret), (int)port->state);
     return ret;
 }
 

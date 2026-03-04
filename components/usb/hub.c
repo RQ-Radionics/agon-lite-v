@@ -370,16 +370,18 @@ new_ds_dev_err:
 static void root_port_handle_events(hcd_port_handle_t root_port_hdl)
 {
     hcd_port_event_t port_event = hcd_port_handle_event(root_port_hdl);
+    ESP_LOGI(HUB_DRIVER_TAG, "root_port_handle_events: event=%d", (int)port_event);
     switch (port_event) {
     case HCD_PORT_EVENT_NONE:
         // Nothing to do
         break;
     case HCD_PORT_EVENT_CONNECTION: {
+        ESP_LOGI(HUB_DRIVER_TAG, "Root port CONNECTION detected — issuing reset");
         if (hcd_port_command(root_port_hdl, HCD_PORT_CMD_RESET) != ESP_OK) {
             ESP_LOGE(HUB_DRIVER_TAG, "Root port reset failed");
             goto reset_err;
         }
-        ESP_LOGD(HUB_DRIVER_TAG, "Root port reset");
+        ESP_LOGI(HUB_DRIVER_TAG, "Root port reset OK");
         usb_speed_t speed;
         if (hcd_port_get_speed(p_hub_driver_obj->constant.root_port_hdl, &speed) != ESP_OK) {
             goto new_dev_err;
@@ -404,6 +406,7 @@ reset_err:
     case HCD_PORT_EVENT_DISCONNECTION:
     case HCD_PORT_EVENT_ERROR:
     case HCD_PORT_EVENT_OVERCURRENT: {
+        ESP_LOGI(HUB_DRIVER_TAG, "Root port event: DISCONN/ERROR/OC (event=%d)", (int)port_event);
         bool port_has_device = false;
         HUB_DRIVER_ENTER_CRITICAL();
         switch (p_hub_driver_obj->dynamic.root_port_state) {

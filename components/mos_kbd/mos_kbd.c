@@ -449,13 +449,6 @@ esp_err_t mos_kbd_init(mos_kbd_scancode_cb_t cb)
     s_prev_mod = 0;
     memset(s_prev_keys, 0, sizeof(s_prev_keys));
 
-    /* 0. Set DEBUG log level for USB stack components so we can trace enumeration */
-    esp_log_level_set("HCD DWC",  ESP_LOG_DEBUG);
-    esp_log_level_set("HUB",      ESP_LOG_DEBUG);
-    esp_log_level_set("USB HOST", ESP_LOG_DEBUG);
-    esp_log_level_set("ENUM",     ESP_LOG_DEBUG);
-    esp_log_level_set("HID HOST", ESP_LOG_DEBUG);
-
     /* 1. Assert hub reset (LOW) and hold while the USB host stack initialises.
      * FE1.1s requires reset asserted for ≥1 ms.  We keep it asserted until
      * the host stack is running so the hub only enumerates once the HCD is
