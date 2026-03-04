@@ -381,9 +381,26 @@ static void lt8912b_hpd_gpio_init(int gpio)
 /* ------------------------------------------------------------------ */
 static esp_err_t lt8912b_init_common(int hpd_gpio)
 {
-    /* No chip ID check — the BSP does not do one, and the I2C read
-     * of reg 0x01 can return 0x00 on first boot if the chip is still
-     * powering up.  If I2C probe worked (we got here), chip is present. */
+    /* Chip ID check — retry up to 3 times with 10 ms delay to handle
+     * the case where the chip is still powering up on first boot.
+     * Chip ID registers: 0x00 = 0x12 (high), 0x01 = 0xB2 (low).        */
+    uint8_t id_h = 0, id_l = 0;
+    esp_err_t id_ret = ESP_ERR_TIMEOUT;
+    for (int attempt = 0; attempt < 3; attempt++) {
+        if (attempt > 0) vTaskDelay(pdMS_TO_TICKS(10));
+        if (lt_read(s_lt.dev_main, 0x00, &id_h) == ESP_OK &&
+            lt_read(s_lt.dev_main, 0x01, &id_l) == ESP_OK) {
+            if (id_h == 0x12 && id_l == 0xB2) {
+                id_ret = ESP_OK;
+                break;
+            }
+        }
+    }
+    if (id_ret != ESP_OK) {
+        ESP_LOGE(TAG, "Chip ID mismatch: got 0x%02X%02X, expected 0x12B2", id_h, id_l);
+        return ESP_ERR_NOT_FOUND;
+    }
+    ESP_LOGI(TAG, "LT8912B detected (ID 0x%02X%02X)", id_h, id_l);
 
     ESP_LOGI(TAG, "LT8912B init sequence start (1024x768@60Hz HDMI)");
 
