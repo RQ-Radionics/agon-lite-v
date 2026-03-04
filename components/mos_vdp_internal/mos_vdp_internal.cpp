@@ -19,7 +19,7 @@
  *   - PS/2 Set 2 keyboard → ASCII + modifier decoding
  *
  * Board: Olimex ESP32-P4-PC
- * Output: 800×600@60Hz VESA over HDMI via LT8912B DSI bridge
+ * Output: 1024×768@60Hz VESA over HDMI via LT8912B DSI bridge
  */
 
 #include "mos_vdp_internal.h"
@@ -50,8 +50,8 @@ static const char *TAG = "vdp_int";
 /* ------------------------------------------------------------------ */
 /* Screen geometry                                                      */
 /* ------------------------------------------------------------------ */
-#define FB_W            800
-#define FB_H            600
+#define FB_W            1024
+#define FB_H            768
 #define FONT_W          8
 #define FONT_H          8
 #define BYTES_PER_PIX   3                     /* RGB888 */

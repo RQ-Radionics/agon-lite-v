@@ -1,16 +1,16 @@
 /*
  * esp_lcd_lt8912b.c — Lontium LT8912B MIPI DSI → HDMI bridge driver
  *
- * Fixed output: 800×600@60Hz over HDMI.
- * DSI input:    2-lane RGB888, 530 Mbps per lane.
+ * Fixed output: 1024×768@60Hz over HDMI.
+ * DSI input:    2-lane RGB888, 896 Mbps per lane.
  *
  * Register sequence derived from upstream Linux kernel driver:
  *   drivers/gpu/drm/bridge/lontium-lt8912b.c  (torvalds/linux)
  *
- * VESA 800×600@60Hz timing:
- *   hact=800  htotal=1056  hfp=40   hs=128  hbp=88
- *   vact=600  vtotal=628   vfp=1    vs=4    vbp=23
- *   pclk=40.0 MHz, hsync=positive, vsync=positive
+ * VESA 1024×768@60Hz timing:
+ *   hact=1024 htotal=1344  hfp=24   hs=136  hbp=160
+ *   vact=768  vtotal=806   vfp=3    vs=6    vbp=29
+ *   pclk=65.0 MHz, hsync=negative, vsync=negative
  *
  * LT8912B I2C sub-addresses (all on the same bus):
  *   0x48 — main  (digital/analog init, HPD status, output path)
@@ -146,7 +146,7 @@ static esp_err_t lt8912b_write_mipi_basic(void)
     esp_err_t ret = ESP_OK;
 
     ESP_RETURN_ON_ERROR(lt_write(d, 0x10, 0x01), TAG, "mipi 0x10");
-    ESP_RETURN_ON_ERROR(lt_write(d, 0x11, 0x04), TAG, "mipi 0x11"); /* settle for vactive<=600 */
+    ESP_RETURN_ON_ERROR(lt_write(d, 0x11, 0x08), TAG, "mipi 0x11"); /* settle for vactive>600 */
     ESP_RETURN_ON_ERROR(lt_write(d, 0x12, 0x04), TAG, "mipi 0x12");
     ESP_RETURN_ON_ERROR(lt_write(d, 0x13, 0x02), TAG, "mipi 0x13"); /* 0x02 = 2 lanes */
     ESP_RETURN_ON_ERROR(lt_write(d, 0x14, 0x00), TAG, "mipi 0x14");
@@ -157,54 +157,54 @@ static esp_err_t lt8912b_write_mipi_basic(void)
     return ret;
 }
 
-/* Step 3: Video timing — 800×600@60Hz (ADDR_CEC_DSI = 0x49)
+/* Step 3: Video timing — 1024×768@60Hz (ADDR_CEC_DSI = 0x49)
  *
- * VESA 800x600@60Hz:
- *   hact=800 htotal=1056 hfp=40  hs=128 hbp=88
- *   vact=600 vtotal=628  vfp=1   vs=4   vbp=23
- *   pclk=40.0 MHz, hsync=positive, vsync=positive
+ * VESA 1024x768@60Hz:
+ *   hact=1024 htotal=1344 hfp=24  hs=136 hbp=160
+ *   vact=768  vtotal=806  vfp=3   vs=6   vbp=29
+ *   pclk=65.0 MHz, hsync=negative, vsync=negative
  */
 static esp_err_t lt8912b_write_video_timing(void)
 {
     i2c_master_dev_handle_t d = s_lt.dev_cec_dsi;
 
     /* Sync widths */
-    ESP_RETURN_ON_ERROR(lt_write(d, 0x18, 128),            TAG, "vt hs");
-    ESP_RETURN_ON_ERROR(lt_write(d, 0x19, 4),              TAG, "vt vs");
+    ESP_RETURN_ON_ERROR(lt_write(d, 0x18, 136),             TAG, "vt hs");
+    ESP_RETURN_ON_ERROR(lt_write(d, 0x19, 6),               TAG, "vt vs");
 
     /* H active */
-    ESP_RETURN_ON_ERROR(lt_write(d, 0x1C, 800 & 0xFF),    TAG, "vt hact_l");
-    ESP_RETURN_ON_ERROR(lt_write(d, 0x1D, 800 >> 8),      TAG, "vt hact_h");
+    ESP_RETURN_ON_ERROR(lt_write(d, 0x1C, 1024 & 0xFF),    TAG, "vt hact_l");
+    ESP_RETURN_ON_ERROR(lt_write(d, 0x1D, 1024 >> 8),      TAG, "vt hact_h");
 
     /* FIFO buffer length (fixed at 12) */
-    ESP_RETURN_ON_ERROR(lt_write(d, 0x2F, 0x0C),           TAG, "vt fifo");
+    ESP_RETURN_ON_ERROR(lt_write(d, 0x2F, 0x0C),            TAG, "vt fifo");
 
     /* H total */
-    ESP_RETURN_ON_ERROR(lt_write(d, 0x34, 1056 & 0xFF),   TAG, "vt htot_l");
-    ESP_RETURN_ON_ERROR(lt_write(d, 0x35, 1056 >> 8),     TAG, "vt htot_h");
+    ESP_RETURN_ON_ERROR(lt_write(d, 0x34, 1344 & 0xFF),    TAG, "vt htot_l");
+    ESP_RETURN_ON_ERROR(lt_write(d, 0x35, 1344 >> 8),      TAG, "vt htot_h");
 
     /* V total */
-    ESP_RETURN_ON_ERROR(lt_write(d, 0x36, 628 & 0xFF),    TAG, "vt vtot_l");
-    ESP_RETURN_ON_ERROR(lt_write(d, 0x37, 628 >> 8),      TAG, "vt vtot_h");
+    ESP_RETURN_ON_ERROR(lt_write(d, 0x36, 806 & 0xFF),     TAG, "vt vtot_l");
+    ESP_RETURN_ON_ERROR(lt_write(d, 0x37, 806 >> 8),       TAG, "vt vtot_h");
 
     /* VBP */
-    ESP_RETURN_ON_ERROR(lt_write(d, 0x38, 23 & 0xFF),     TAG, "vt vbp_l");
-    ESP_RETURN_ON_ERROR(lt_write(d, 0x39, 23 >> 8),       TAG, "vt vbp_h");
+    ESP_RETURN_ON_ERROR(lt_write(d, 0x38, 29 & 0xFF),      TAG, "vt vbp_l");
+    ESP_RETURN_ON_ERROR(lt_write(d, 0x39, 29 >> 8),        TAG, "vt vbp_h");
 
     /* VFP */
-    ESP_RETURN_ON_ERROR(lt_write(d, 0x3A, 1 & 0xFF),      TAG, "vt vfp_l");
-    ESP_RETURN_ON_ERROR(lt_write(d, 0x3B, 1 >> 8),        TAG, "vt vfp_h");
+    ESP_RETURN_ON_ERROR(lt_write(d, 0x3A, 3 & 0xFF),       TAG, "vt vfp_l");
+    ESP_RETURN_ON_ERROR(lt_write(d, 0x3B, 3 >> 8),         TAG, "vt vfp_h");
 
     /* HBP */
-    ESP_RETURN_ON_ERROR(lt_write(d, 0x3C, 88 & 0xFF),     TAG, "vt hbp_l");
-    ESP_RETURN_ON_ERROR(lt_write(d, 0x3D, 88 >> 8),       TAG, "vt hbp_h");
+    ESP_RETURN_ON_ERROR(lt_write(d, 0x3C, 160 & 0xFF),     TAG, "vt hbp_l");
+    ESP_RETURN_ON_ERROR(lt_write(d, 0x3D, 160 >> 8),       TAG, "vt hbp_h");
 
-    /* HFP — VESA value: 40 (NOT the BSP 48) */
-    ESP_RETURN_ON_ERROR(lt_write(d, 0x3E, 40 & 0xFF),     TAG, "vt hfp_l");
-    ESP_RETURN_ON_ERROR(lt_write(d, 0x3F, 40 >> 8),       TAG, "vt hfp_h");
+    /* HFP — VESA 1024x768: 24 */
+    ESP_RETURN_ON_ERROR(lt_write(d, 0x3E, 24 & 0xFF),      TAG, "vt hfp_l");
+    ESP_RETURN_ON_ERROR(lt_write(d, 0x3F, 24 >> 8),        TAG, "vt hfp_h");
 
-    /* Sync polarity: 800x600 = both positive → bits[1:0] = 0x03 (ADDR_MAIN) */
-    ESP_RETURN_ON_ERROR(lt_write(s_lt.dev_main, 0xAB, 0x03), TAG, "vt pol");
+    /* Sync polarity: 1024x768 = both negative → bits[1:0] = 0x00 (ADDR_MAIN) */
+    ESP_RETURN_ON_ERROR(lt_write(s_lt.dev_main, 0xAB, 0x00), TAG, "vt pol");
 
     return ESP_OK;
 }
@@ -215,16 +215,16 @@ static esp_err_t lt8912b_write_video_timing(void)
  * The DDS table (0x1F-0x2E, 0x42-0x5C) is board-agnostic; the HDMI
  * TMDS clock is derived from the DSI input clock, not the crystal.
  * The strm_sw_freq_word (0x4E-0x50) = pclk_mhz * 0x16C16 (Espressif formula).
- *   800x600@40MHz: 40 * 0x16C16 = 0x38E370 → [7:0]=0x70, [15:8]=0xE3, [23:16]=0x38
+ *   1024x768@65MHz: 65 * 0x16C16 = 0x5C7196 → [7:0]=0x96, [15:8]=0x71, [23:16]=0x5C
  */
 static esp_err_t lt8912b_write_dds_config(void)
 {
     i2c_master_dev_handle_t d = s_lt.dev_cec_dsi;
 
     /* strm_sw_freq_word[23:0] with enable=0x80 in MSB reg */
-    ESP_RETURN_ON_ERROR(lt_write(d, 0x4E, 0x70), TAG, "dds 4E");
-    ESP_RETURN_ON_ERROR(lt_write(d, 0x4F, 0xE3), TAG, "dds 4F");
-    ESP_RETURN_ON_ERROR(lt_write(d, 0x50, 0x38), TAG, "dds 50");
+    ESP_RETURN_ON_ERROR(lt_write(d, 0x4E, 0x96), TAG, "dds 4E");
+    ESP_RETURN_ON_ERROR(lt_write(d, 0x4F, 0x71), TAG, "dds 4F");
+    ESP_RETURN_ON_ERROR(lt_write(d, 0x50, 0x5C), TAG, "dds 50");
     ESP_RETURN_ON_ERROR(lt_write(d, 0x51, 0x80), TAG, "dds 51 arm");
 
     /* Internal timing reference table */
@@ -402,7 +402,7 @@ static esp_err_t lt8912b_init_common(int hpd_gpio)
     lt8912b_hpd_gpio_init(s_lt.hpd_gpio);
 
     s_lt.initialized = true;
-    ESP_LOGI(TAG, "LT8912B initialized — 800x600@60Hz HDMI output");
+    ESP_LOGI(TAG, "LT8912B initialized — 1024x768@60Hz HDMI output");
 
     if (esp_lcd_lt8912b_is_connected()) {
         ESP_LOGI(TAG, "HDMI cable connected");

@@ -76,13 +76,9 @@ CONFIG_LT8912B_SCL_GPIO=8
 CONFIG_LT8912B_HPD_GPIO=15
 CONFIG_LT8912B_HDMI_MODE=y
 CONFIG_LT8912B_DSI_LANES=2
-# 800×600@60Hz: pclk=40 MHz, VESA timings (HFP=40, not BSP 48)
-# IDF DPI clk = lane_mbps/8 / round(lane_mbps/8 / pclk)
-# lane=530 → byte=66.25 MHz → div=round(66.25/40)=2 → real=33.125 MHz
-# ... but IDF DPI clock is set directly to 40 in main.c; lane just needs to
-# provide enough bandwidth: 40 MHz × 24 / 2 lanes = 480 Mbps < 530 Mbps ✓
-# This is the value that worked (commit 65e9577).
-CONFIG_LT8912B_DSI_LANE_MBPS=530
+# 1024×768@60Hz: pclk=65 MHz, VESA timings
+# Bandwidth: 65 MHz × 24 / 2 lanes = 780 Mbps < 896 Mbps ✓
+CONFIG_LT8912B_DSI_LANE_MBPS=896
 
 # mos_kbd component — USB HID keyboard via IDF usb_host (no managed component)
 CONFIG_MOS_KBD_ENABLED=y

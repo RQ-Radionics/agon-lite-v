@@ -171,28 +171,28 @@ static esp_lcd_panel_handle_t hdmi_init(void)
     ESP_LOGI(TAG, "HDMI: step 3 OK");
 
     /* 4. Create DPI panel — feeds pixel data from ESP32-P4 to LT8912B DSI input.
-     *    800x600 @ 40 MHz pixel clock, RGB888 (24-bit).
-     *    Olimex BSP-validated timings (macro LT8912B_800x600_PANEL_60HZ_DPI_CONFIG):
-     *      htotal=1056 (hfp=48 hs=128 hbp=88), vtotal=628 (vfp=1 vs=4 vbp=23)
-     *      h_polarity=positive, v_polarity=positive
+     * 1024x768 @ 65 MHz pixel clock, RGB888 (24-bit).
+     *    VESA 1024x768@60Hz timings:
+     *      htotal=1344 (hfp=24 hs=136 hbp=160), vtotal=806 (vfp=3 vs=6 vbp=29)
+     *      h_polarity=negative, v_polarity=negative
      *    num_fbs=2: double-buffered so mos_vdp_internal can render to back buffer
      *               while the DMA controller reads the front buffer.
      *    disable_lp=1: stay in HS mode during blanking (required for video mode). */
     esp_lcd_panel_handle_t panel = NULL;
     esp_lcd_dpi_panel_config_t dpi_cfg = {
         .dpi_clk_src         = MIPI_DSI_DPI_CLK_SRC_DEFAULT,
-        .dpi_clock_freq_mhz  = 40,          /* 40 MHz for 800x600@60Hz (Olimex BSP) */
+        .dpi_clock_freq_mhz  = 65,          /* 65 MHz for 1024x768@60Hz VESA */
         .pixel_format        = LCD_COLOR_PIXEL_FORMAT_RGB888,
         .num_fbs             = 2,           /* double-buffered for tear-free rendering */
         .video_timing = {
-            .h_size          = 800,
-            .v_size          = 600,
-            .hsync_pulse_width = 128,
-            .hsync_back_porch  = 88,
-            .hsync_front_porch = 40,   /* VESA value (NOT BSP 48) — required for sync */
-            .vsync_pulse_width = 4,
-            .vsync_back_porch  = 23,
-            .vsync_front_porch = 1,
+            .h_size          = 1024,
+            .v_size          = 768,
+            .hsync_pulse_width = 136,
+            .hsync_back_porch  = 160,
+            .hsync_front_porch = 24,
+            .vsync_pulse_width = 6,
+            .vsync_back_porch  = 29,
+            .vsync_front_porch = 3,
         },
         .flags.disable_lp    = 1,
     };
@@ -214,7 +214,7 @@ static esp_lcd_panel_handle_t hdmi_init(void)
     {
         void *fb0 = NULL, *fb1 = NULL;
         if (esp_lcd_dpi_panel_get_frame_buffer(panel, 2, &fb0, &fb1) == ESP_OK) {
-            size_t fb_size = 800 * 600 * 3;   /* RGB888 */
+            size_t fb_size = 1024 * 768 * 3;   /* RGB888 */
             /* Paint fb0 red (R=0xFF G=0x00 B=0x00) as a DMA sanity check.
              * If the screen shows red before the shell paints anything,
              * the DPI→LT8912B→HDMI pipeline is working correctly.
@@ -239,7 +239,7 @@ static esp_lcd_panel_handle_t hdmi_init(void)
     esp_lcd_panel_disp_on_off(panel, true);
     ESP_LOGI(TAG, "HDMI: step 5 OK");
 
-    ESP_LOGI(TAG, "HDMI: 800x600@60Hz ready%s",
+    ESP_LOGI(TAG, "HDMI: 1024x768@60Hz ready%s",
              esp_lcd_lt8912b_is_connected() ? " (cable connected)" : " (no cable)");
     return panel;
 }
