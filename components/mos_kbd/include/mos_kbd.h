@@ -2,7 +2,7 @@
  * mos_kbd.h — USB HID keyboard driver for ESP32-MOS
  *
  * Drives a USB keyboard connected via a FE1.1s USB hub using the ESP32
- * USB host stack (PHY1 / OTG11 Full-Speed, GPIO26/27).
+ * USB host stack (PHY0 / OTG20 High-Speed, GPIO24/25).
  *
  * Output: PS/2 Set 2 scancodes delivered via a registered callback.
  * Extended keys (arrow keys, Home, End, PgUp, PgDn, Ins, Del, etc.)
@@ -13,8 +13,8 @@
  *
  * Board: Olimex ESP32-P4-PC
  *   HUB_RST#: GPIO21 (active LOW — drive HIGH to enable hub)
- *   USB D-:   GPIO26 (OTG11 FS PHY1)
- *   USB D+:   GPIO27 (OTG11 FS PHY1)
+ *   USB D-:   GPIO24 (OTG20 HS PHY0, same as production test)
+ *   USB D+:   GPIO25 (OTG20 HS PHY0, same as production test)
  */
 
 #pragma once
@@ -42,7 +42,7 @@ typedef void (*mos_kbd_scancode_cb_t)(uint8_t byte);
  * mos_kbd_init — start the USB HID keyboard driver.
  *
  * Deasserts HUB_RST# (GPIO21 HIGH), waits 100 ms for hub enumerate,
- * installs the USB host stack on PHY1 (peripheral_map = BIT1), and
+ * installs the USB host stack on PHY0 (peripheral_map = 0), and
  * starts the HID host driver.  All USB tasks are pinned to core 0.
  *
  * @param cb  Callback invoked for each PS/2 Set 2 scancode byte.

@@ -2,7 +2,7 @@
  * mos_kbd.c — USB HID keyboard driver for ESP32-MOS
  *
  * Architecture:
- *   - USB host stack installed on PHY1 (OTG11 FS, GPIO26/27, peripheral_map=BIT1)
+ *   - USB host stack installed on PHY0 (OTG20 HS, GPIO24/25, peripheral_map=0)
  *   - FE1.1s USB hub on GPIO21 (HUB_RST# active LOW; drive HIGH before init)
  *   - usb_lib_task (core 0): calls usb_host_lib_handle_events() in a loop
  *   - HID host driver installs its own background task (core 0)
@@ -449,6 +449,13 @@ esp_err_t mos_kbd_init(mos_kbd_scancode_cb_t cb)
     s_prev_mod = 0;
     memset(s_prev_keys, 0, sizeof(s_prev_keys));
 
+    /* 0. Set DEBUG log level for USB stack components so we can trace enumeration */
+    esp_log_level_set("HCD DWC",  ESP_LOG_DEBUG);
+    esp_log_level_set("HUB",      ESP_LOG_DEBUG);
+    esp_log_level_set("USB HOST", ESP_LOG_DEBUG);
+    esp_log_level_set("ENUM",     ESP_LOG_DEBUG);
+    esp_log_level_set("HID HOST", ESP_LOG_DEBUG);
+
     /* 1. Assert hub reset (LOW) and hold while the USB host stack initialises.
      * FE1.1s requires reset asserted for ≥1 ms.  We keep it asserted until
      * the host stack is running so the hub only enumerates once the HCD is
@@ -464,12 +471,11 @@ esp_err_t mos_kbd_init(mos_kbd_scancode_cb_t cb)
     ESP_LOGI(TAG, "Hub reset: asserting GPIO%d LOW", CONFIG_MOS_KBD_HUB_RST_GPIO);
     gpio_set_level(CONFIG_MOS_KBD_HUB_RST_GPIO, 0);   /* assert reset */
 
-    /* 2. Install USB host library on PHY1 (peripheral_map = BIT1 → OTG11 FS)
-     * GPIO27 = D+, GPIO26 = D- (hardwired internal FSLS PHY for OTG11).
-     * Priority 10 matches Espressif reference BSP. */
+    /* 2. Install USB host library on PHY0 (peripheral_map = 0 → BIT0 → OTG20 HS)
+     * GPIO24 = D-, GPIO25 = D+ (UTMI PHY, same connector as production test). */
     const usb_host_config_t host_config = {
         .skip_phy_setup  = false,
-        .peripheral_map  = BIT(1),    /* PHY1 = OTG11, GPIO26/27 */
+        .peripheral_map  = 0,         /* PHY0 = OTG20 HS, GPIO24/25 */
         .intr_flags      = ESP_INTR_FLAG_LEVEL1,
     };
     esp_err_t ret = usb_host_install(&host_config);
