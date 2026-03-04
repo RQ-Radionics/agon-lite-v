@@ -133,7 +133,30 @@ pin = -1 → no SDIO probing at boot on the Olimex. Functionally safe.
 
 Both P4 scripts wipe `sdkconfig` and `build/` before running `idf.py set-target`.
 
-## Current State (session end 2026-03-02, session 3)
+## ESP32P4 Startup Stack — CRITICAL (commit cb0d77a)
+
+`CONFIG_ESP_MAIN_TASK_STACK_SIZE` must be **8192**, NOT 65536.
+
+**Why**: On ESP32-P4 rev<3 (`CONFIG_ESP32P4_SELECTS_REV_LESS_V3=y`) the internal
+heap region available to `pvPortMalloc` before FreeRTOS starts is only ~111KB:
+
+```
+heap LOW: _heap_start_low (0x4ff1f360) → APP_USABLE_DIRAM_END (0x4ff3afc0)
+APP_USABLE_DIRAM_END = SOC_ROM_STACK_START(0x4ff3cfc0) - SOC_ROM_STACK_SIZE(0x2000)
+```
+
+With ~15KB consumed by IDF init_fn handlers (idle tasks, timer task, etc.) before
+`esp_startup_start_app()` runs, the TLSF allocator cannot find a contiguous 65KB
+block → `pvPortMalloc(65536)` returns NULL → `xTaskCreatePinnedToCore` returns
+`pdFAIL` → `assert(res == pdTRUE)` fires at `app_startup.c:86`.
+
+`app_main()` only does NVS init, flash mount, and spawns `mos_main_task` with a
+192KB PSRAM stack. It needs ≤8KB for itself. With 8KB, `pvPortMalloc(8200)` has
+ample room in the 96KB remaining after init allocations.
+
+**Never raise this back to 65536** — it will crash on every cold boot.
+
+## Current State (session end 2026-03-04, session 4)
 
 ### Fully working ✅ (Waveshare ESP32-P4-WIFI6)
 - VDP handshake, color banner, mode 16
@@ -145,9 +168,10 @@ Both P4 scripts wipe `sdkconfig` and `build/` before running `idf.py set-target`
 - **`helloworld` executes, prints to VDP, writes file — full API chain confirmed**
 - **`bbcbasic` heap zero fix applied** — no more StoreProhibited crash
 
-### Fully working ✅ (Olimex ESP32-P4-PC — compile-verified, not yet hardware-tested)
+### Fully working ✅ (Olimex ESP32-P4-PC — boots on hardware)
 - `build_olimex_p4pc.sh` builds cleanly (0 errors)
-- `app_main` launches `mos_main_task` with 96KB PSRAM stack (stack overflow fix)
+- **Boots correctly** after startup crash fix (commit cb0d77a)
+- `app_main` launches `mos_main_task` with 192KB PSRAM stack
 - `mos_net` abstraction: Ethernet backend with IP101GRR PHY via RMII
 - `mos_hal` console: USB-JTAG/CDC (USB-C on the Olimex board)
 - Correct GPIO pins from schematic Rev B
@@ -166,6 +190,13 @@ Both P4 scripts wipe `sdkconfig` and `build/` before running `idf.py set-target`
   - HID device callback runs inline in HID background task (core 0) — no queue
   - Scancode stub in `main.c` (logs at DEBUG); will be replaced by internal VDP
   - `CONFIG_USB_HOST_HUBS_SUPPORTED=y`, `CONFIG_USB_HOST_HUB_MULTI_LEVEL=y`
+- **`mos_vdp_internal`**: UDG, GCOL modes, PLOT engine, VDU 23,0 protocol (esp32-mos-29j)
+  - UDG glifos VDU 23,32-255 en PSRAM
+  - GCOL paint modes (AND/OR/XOR/Invert) + CLG
+  - PLOT completo: líneas, rectángulos, círculos, triángulos, flood fill
+  - VDU 23,0 sub-protocol: handshake (0x80), cursor pos (0x82), mode info (0x86)
+  - VDU 23,0,0x85 audio protocol + sintetizador 3 canales (square/sine/triangle/sawtooth/noise)
+  - synth_mixer_task stack 8192 bytes (sinf() soft-float requiere >4096)
 
 ### mos_kbd CMakeLists.txt note (learned this session)
 - `espressif__usb_host_hid` must be in `PRIV_REQUIRES` (not `REQUIRES`) because the
@@ -180,7 +211,7 @@ Both P4 scripts wipe `sdkconfig` and `build/` before running `idf.py set-target`
 - High-res modes (800×600, 1024×768) are deferred — issue esp32-mos-agw
 
 ### Next areas to work on
-- **Hardware test**: flash Olimex build, verify HDMI, audio, keyboard on real hardware
+- **Hardware test**: verificar HDMI, audio y teclado en hardware real (ahora que arranca)
 - **`mos_vdp_internal`** — port console8 C++ VDP core as IDF component (esp32-mos-hfq)
   - Once done, replace `mos_kbd_scancode_stub` in `main.c` with
     `mos_vdp_internal_send_scancode()` — the stub is clearly marked with TODO comment
