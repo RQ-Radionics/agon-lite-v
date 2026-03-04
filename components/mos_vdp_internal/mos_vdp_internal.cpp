@@ -56,8 +56,10 @@ static const char *TAG = "vdp_int";
 #define BYTES_PER_PIX   3                     /* RGB888 */
 #define FB_SIZE         (FB_W * FB_H * BYTES_PER_PIX)  /* 1440000 */
 
-static int s_mode_w = 640;
-static int s_mode_h = 480;
+static int     s_mode_w      = 640;
+static int     s_mode_h      = 480;
+static uint8_t s_mode_num    = 0;    /* current Agon mode number (0-18) */
+static uint8_t s_mode_colours = 16; /* number of colours in current mode */
 #define COLS            (s_mode_w / FONT_W)
 #define ROWS            (s_mode_h / FONT_H)
 
@@ -929,8 +931,8 @@ static void send_mode_information(void)
     vdp_send_byte(sh & 0xFF); vdp_send_byte((sh >> 8) & 0xFF);
     vdp_send_byte(cols & 0xFF); vdp_send_byte((cols >> 8) & 0xFF);
     vdp_send_byte(rows & 0xFF); vdp_send_byte((rows >> 8) & 0xFF);
-    vdp_send_byte(16);   /* number of colours */
-    vdp_send_byte(0);    /* mode number (simplified) */
+    vdp_send_byte(s_mode_colours);
+    vdp_send_byte(s_mode_num);
 }
 
 /* Send general poll response (VDP_GP 0x80) — used for MOS ready handshake */
@@ -1158,18 +1160,20 @@ static void vdp_render_task(void *arg)
 
 static void mode_set(uint8_t mode)
 {
-    static const struct { int w; int h; } mode_dims[] = {
-        {640,480},{640,480},{640,480},          /* 0-2  */
-        {640,240},{640,240},{640,240},{640,240}, /* 3-6  */
-        {640,480},                               /* 7   fallback */
-        {320,240},{320,240},{320,240},{320,240}, /* 8-11 */
-        {320,200},{320,200},{320,200},{320,200}, /* 12-15 */
-        {800,600},{800,600},{800,600},           /* 16-18 */
+    static const struct { int w; int h; uint8_t colours; } mode_dims[] = {
+        {640,480,16},{640,480,16},{640,480,16}, /* 0-2  */
+        {640,240,16},{640,240,16},{640,240,16},{640,240,16}, /* 3-6  */
+        {640,480, 8},                           /* 7    teletext fallback */
+        {320,240,64},{320,240,64},{320,240,64},{320,240,64}, /* 8-11 */
+        {320,200,16},{320,200,16},{320,200,16},{320,200,16}, /* 12-15 */
+        {800,600, 4},{800,600, 4},{800,600, 4}, /* 16-18 */
     };
     int m = (int)mode;
     if (m < 0 || m > 18) m = 0;
-    s_mode_w = mode_dims[m].w;
-    s_mode_h = mode_dims[m].h;
+    s_mode_w       = mode_dims[m].w;
+    s_mode_h       = mode_dims[m].h;
+    s_mode_num     = (uint8_t)m;
+    s_mode_colours = mode_dims[m].colours;
     scale_update();
     palette_reset();
     s_fg = 15; s_bg = 0;
@@ -2128,8 +2132,9 @@ esp_err_t mos_vdp_internal_init(esp_lcd_panel_handle_t dpi_panel)
     /* Allocate UDG table in PSRAM */
     udg_init();
 
-    /* Reset state */
+    /* Reset state — boot into mode 0 (640×480, 16 colours) */
     s_mode_w = 640; s_mode_h = 480;
+    s_mode_num = 0; s_mode_colours = 16;
     scale_update();
     palette_reset();
     s_fg = 15; s_bg = 0;
