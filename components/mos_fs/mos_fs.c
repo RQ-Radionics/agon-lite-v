@@ -1,12 +1,13 @@
 /*
  * mos_fs.c - Filesystem implementation for ESP32-MOS
+ *
+ * SD card is the sole user storage volume.  No internal flash FAT partition.
  */
 
 #include <string.h>
 #include <stdio.h>
 #include "esp_log.h"
 #include "esp_vfs_fat.h"
-#include "wear_levelling.h"
 #include "sdmmc_cmd.h"
 #include "driver/sdspi_host.h"
 #include "driver/spi_common.h"
@@ -17,66 +18,22 @@
 static const char *TAG = "mos_fs";
 
 /* --- State --- */
-static bool s_flash_mounted = false;
 static bool s_sd_mounted    = false;
 static char s_current_drive = MOS_DRIVE_DEFAULT;
-static char s_cwd[512]      = MOS_FLASH_MOUNT;
-
-/* Wear-levelling handle for flash FAT */
-static wl_handle_t s_wl_handle = WL_INVALID_HANDLE;
+static char s_cwd[512]      = MOS_SD_MOUNT;
 
 /* SD card handle */
 static sdmmc_card_t *s_sd_card = NULL;
 
 /* ------------------------------------------------------------------ */
-/* Flash (internal)                                                     */
-/* ------------------------------------------------------------------ */
-
-int mos_fs_mount_flash(void)
-{
-    if (s_flash_mounted) {
-        return 0;
-    }
-
-    /* Mount with wear levelling (read-write).
-     * flash_data.sh uses wl_wrap.py to inject valid WL state/config blocks
-     * into the FAT image before flashing, so the WL driver finds them and
-     * does NOT reformat the partition.
-     * format_if_mount_failed = false: if blocks are missing/corrupt, fail
-     * loudly instead of silently erasing our files.
-     */
-    esp_vfs_fat_mount_config_t mount_cfg = {
-        .format_if_mount_failed = false,
-        .max_files              = 8,
-        .allocation_unit_size   = 512,
-    };
-
-    esp_err_t err = esp_vfs_fat_spiflash_mount_rw_wl(
-        MOS_FLASH_MOUNT,
-        "storage",          /* partition label in partitions.csv */
-        &mount_cfg,
-        &s_wl_handle
-    );
-
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Flash mount failed: %s", esp_err_to_name(err));
-        return -1;
-    }
-
-    s_flash_mounted = true;
-    ESP_LOGI(TAG, "Flash FAT mounted (rw) at %s", MOS_FLASH_MOUNT);
-    return 0;
-}
-
-/* ------------------------------------------------------------------ */
-/* SD card (external)                                                   */
+/* SD card                                                              */
 /* ------------------------------------------------------------------ */
 
 #if CONFIG_IDF_TARGET_ESP32P4
 /*
  * ESP32-P4: SDMMC native interface (Slot 0, 4-bit, IOMUX-fixed GPIOs).
  *
- * Waveshare ESP32-P4-WIFI6 pin mapping (same as Espressif P4-Function-EV-Board):
+ * Waveshare ESP32-P4-WIFI6 / Olimex ESP32-P4-PC pin mapping:
  *   CLK = GPIO43   CMD = GPIO44
  *   D0  = GPIO39   D1  = GPIO40   D2  = GPIO41   D3  = GPIO42
  *
@@ -122,7 +79,7 @@ int mos_fs_mount_sd(void)
     slot.d1    = 40;
     slot.d2    = 41;
     slot.d3    = 42;
-    slot.cd    = SDMMC_SLOT_NO_CD;   /* no Card Detect pin on Waveshare */
+    slot.cd    = SDMMC_SLOT_NO_CD;   /* no Card Detect pin */
     slot.wp    = SDMMC_SLOT_NO_WP;
     slot.flags |= SDMMC_SLOT_FLAG_INTERNAL_PULLUP;
 
@@ -134,6 +91,7 @@ int mos_fs_mount_sd(void)
     }
 
     s_sd_mounted = true;
+    snprintf(s_cwd, sizeof(s_cwd), "%s", MOS_SD_MOUNT);
     ESP_LOGI(TAG, "SD FAT mounted at %s", MOS_SD_MOUNT);
     sdmmc_card_print_info(stdout, s_sd_card);
     return 0;
@@ -209,6 +167,7 @@ int mos_fs_mount_sd(void)
     }
 
     s_sd_mounted = true;
+    snprintf(s_cwd, sizeof(s_cwd), "%s", MOS_SD_MOUNT);
     ESP_LOGI(TAG, "SD FAT mounted at %s", MOS_SD_MOUNT);
     sdmmc_card_print_info(stdout, s_sd_card);
     return 0;
@@ -231,7 +190,6 @@ int mos_fs_remount_sd(void)
 /* Status                                                               */
 /* ------------------------------------------------------------------ */
 
-bool mos_fs_flash_mounted(void) { return s_flash_mounted; }
 bool mos_fs_sd_mounted(void)    { return s_sd_mounted; }
 char mos_fs_getdrive(void)      { return s_current_drive; }
 void mos_fs_setdrive(char d)    { s_current_drive = d; }
@@ -264,18 +222,12 @@ int mos_fs_resolve(const char *path, char *out_buf, size_t out_size)
 {
     if (!path || !out_buf || out_size == 0) return -1;
 
-    const char *mount = (s_current_drive == MOS_DRIVE_SD)
-                        ? MOS_SD_MOUNT : MOS_FLASH_MOUNT;
+    /* All drives resolve to SD card */
+    const char *mount = MOS_SD_MOUNT;
 
-    /* Drive-prefixed: "A:..." or "B:..." */
+    /* Drive-prefixed: "A:..." or "B:..." — both map to SD */
     if (path[0] != '\0' && path[1] == ':') {
-        char drive = path[0];
         const char *rest = path + 2;
-        if (drive == MOS_DRIVE_FLASH || drive == 'a') {
-            mount = MOS_FLASH_MOUNT;
-        } else if (drive == MOS_DRIVE_SD || drive == 'b') {
-            mount = MOS_SD_MOUNT;
-        }
         /* Skip leading slash if present */
         if (*rest == '/') rest++;
         if (*rest == '\0') {
@@ -316,13 +268,8 @@ int mos_fs_chdir(const char *path)
     char resolved[512];
     if (mos_fs_resolve(path, resolved, sizeof(resolved)) != 0) return -1;
 
-    /* Update current drive if path starts with a known mount */
-    if (strncmp(resolved, MOS_FLASH_MOUNT, strlen(MOS_FLASH_MOUNT)) == 0) {
-        s_current_drive = MOS_DRIVE_FLASH;
-    } else if (strncmp(resolved, MOS_SD_MOUNT, strlen(MOS_SD_MOUNT)) == 0) {
-        s_current_drive = MOS_DRIVE_SD;
-    }
-
     snprintf(s_cwd, sizeof(s_cwd), "%s", resolved);
+    /* Keep current_drive — only one drive exists */
+    s_current_drive = MOS_DRIVE_SD;
     return 0;
 }

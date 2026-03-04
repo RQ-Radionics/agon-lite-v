@@ -309,20 +309,13 @@ int mos_exec(char *buffer)
         char drive = command[0];
         char resolved[MOS_PATH_MAX];
         int r;
-        if (drive == MOS_DRIVE_FLASH || drive == 'a') {
-            if (!mos_fs_flash_mounted()) {
-                mos_printf("Drive A: not available\r\n");
+        /* A: and B: both resolve to SD card (only storage volume) */
+        if (drive == 'A' || drive == 'a' || drive == 'B' || drive == 'b') {
+            if (!mos_fs_sd_mounted()) {
+                mos_printf("Drive %c: not available (no SD card)\r\n", drive);
                 free(command); return FR_NOT_READY;
             }
             mos_fs_resolve("A:", resolved, sizeof(resolved));
-            r = mos_fs_chdir(resolved);
-            free(command); return r;
-        } else if (drive == MOS_DRIVE_SD || drive == 'b') {
-            if (!mos_fs_sd_mounted()) {
-                mos_printf("Drive B: not available\r\n");
-                free(command); return FR_NOT_READY;
-            }
-            mos_fs_resolve("B:", resolved, sizeof(resolved));
             r = mos_fs_chdir(resolved);
             free(command); return r;
         }
@@ -348,7 +341,7 @@ int mos_exec(char *buffer)
         char interp[MOS_PATH_MAX];
         snprintf(name, sizeof(name), "%.*s", cmdLen, commandPtr);
 
-        const char *search[] = { mos_fs_getcwd(), MOS_FLASH_MOUNT, NULL };
+        const char *search[] = { mos_fs_getcwd(), MOS_SD_MOUNT, NULL };
 
         /* 1. BBC BASIC script: <name>.bbc — run via bbcbasic.bin */
         char bbcname[68];
@@ -1032,8 +1025,8 @@ static int cmd_MEM(char *ptr)
     size_t largest    = heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT);
     mos_printf("Free heap:    %u bytes\r\n", (unsigned)free_heap);
     mos_printf("Largest block: %u bytes\r\n", (unsigned)largest);
-    mos_printf("Flash mount:  %s\r\n", MOS_FLASH_MOUNT);
     mos_printf("SD mount:     %s\r\n", MOS_SD_MOUNT);
+    mos_printf("SD mounted:   %s\r\n", mos_fs_sd_mounted() ? "yes" : "no");
     mos_printf("\r\n");
     return FR_OK;
 }
@@ -1397,9 +1390,9 @@ void mos_shell_reset(void)
     mos_sysvars_reset();
     mos_editor_reset();
 
-    /* Return to flash root so the next session always starts at A: */
+    /* Return to SD root so the next session always starts at A: */
     char resolved[MOS_PATH_MAX];
-    mos_fs_resolve(MOS_FLASH_MOUNT, resolved, sizeof(resolved));
+    mos_fs_resolve(MOS_SD_MOUNT, resolved, sizeof(resolved));
     mos_fs_chdir(resolved);
 }
 

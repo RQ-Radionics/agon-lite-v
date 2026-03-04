@@ -2,15 +2,16 @@
  * main.c - ESP32-MOS entry point
  *
  * Boot sequence:
- *   1. Console (UART0)
- *   2. Flash FAT mount
- *   3. SD card mount (optional)
- *   4. WiFi connect
- *   5. SNTP time sync (non-fatal if it times out)
- *   6. VDP TCP server start
- *   7. Shell init + welcome banner
- *   8. Autoexec
- *   9. Interactive shell loop (never returns)
+ *   1. NVS init (app_main, DRAM stack)
+ *   2. Spawn mos_main_task (PSRAM stack)
+ *   3. Console init
+ *   4. HDMI / audio / keyboard init
+ *   5. SD card mount (required)
+ *   6. Network init (optional)
+ *   7. SNTP time sync (non-fatal)
+ *   8. VDP TCP server start
+ *   9. Shell init + welcome banner + autoexec
+ *  10. Interactive shell loop (never returns)
  */
 
 #include <stdio.h>
@@ -282,13 +283,11 @@ static esp_lcd_panel_handle_t hdmi_init(void)
 
 static void print_banner(void)
 {
-    /* All status values: green=OK, red=FAIL/error, white=N/A neutral */
-    const char *flash_s = mos_fs_flash_mounted() ? COL_GREEN "OK"   COL_BWHITE
-                                                  : COL_RED   "FAIL" COL_BWHITE;
+    /* All status values: green=OK, red=FAIL/error */
     const char *sd_s    = mos_fs_sd_mounted()    ? COL_GREEN "OK"   COL_BWHITE
-                                                  : COL_WHITE "N/A"  COL_BWHITE;
+                                                  : COL_RED   "FAIL" COL_BWHITE;
     const char *wifi_s  = mos_net_is_connected() ? COL_GREEN "OK"   COL_BWHITE
-                                                 : COL_RED   "FAIL" COL_BWHITE;
+                                                  : COL_RED   "FAIL" COL_BWHITE;
 
     /* Switch to 16-colour mode (VDU 22, 0).
      * Cannot embed 0x00 in a string literal so send the two bytes manually.
@@ -312,7 +311,7 @@ static void print_banner(void)
              "  ********************************" COL_BWHITE "\r\n"
              "\r\n");
 
-    mos_printf("  Flash: %s   SD: %s   WiFi: %s\r\n", flash_s, sd_s, wifi_s);
+    mos_printf("  SD: %s   WiFi: %s\r\n", sd_s, wifi_s);
     mos_printf("  VDP port: " COL_GREEN "%d" COL_BWHITE "\r\n", MOS_VDP_TCP_PORT);
     mos_printf("\r\n");
     mos_printf(COL_YELLOW "  Type HELP for commands." COL_BWHITE "\r\n");
@@ -333,11 +332,10 @@ static void print_banner(void)
 
 static void mos_main_task(void *arg)
 {
-    /* Steps 0-2 (NVS + flash FAT) were done in app_main with LP DRAM stack.
-     * Any SPI flash access (esp_partition, nvs_flash_init, vfs_fat_spiflash)
-     * requires the calling task's stack to be in LP DRAM (passes
-     * esp_task_stack_is_sane_cache_disabled). PSRAM stacks fail that check.
-     * app_main passes the flash-mount result as (intptr_t)arg. */
+    /* NVS was inited in app_main (requires LP DRAM stack).
+     * SD card mount is done here — SDMMC does NOT go through the SPI flash
+     * cache path and has no stack-location restriction.  PSRAM stacks are fine.
+     * app_main passes 0 always (arg unused). */
 
     /* 1. Console */
     mos_hal_console_init();
@@ -408,14 +406,11 @@ static void mos_main_task(void *arg)
     }
 #endif
 
-    /* 2. (Done in app_main) — report flash result */
-    if ((intptr_t)arg != 0) {
-        ESP_LOGE(TAG, "Flash FAT mount failed in app_main");
-    }
-
-    /* 3. Mount SD card (optional — SD uses SDMMC, not SPI flash cache path) */
+    /* 2. Mount SD card — only storage volume.
+     *    SDMMC uses its own bus; no SPI flash cache interference.
+     *    Log a warning but continue — shell can still run (will show FAIL in banner). */
     if (mos_fs_mount_sd() != 0) {
-        ESP_LOGW(TAG, "SD card not available");
+        ESP_LOGW(TAG, "SD card not available — file operations will fail");
     }
 
     /* 4. Network — bring up IP connectivity (WiFi, Ethernet, or none).
@@ -543,7 +538,7 @@ static void mos_main_task(void *arg)
             if (f) {
                 fclose(f);
                 ESP_LOGI(TAG, "Running %s", autoexec);
-                mos_shell_exec("EXEC " MOS_FLASH_MOUNT "/autoexec.bat");
+                mos_shell_exec("EXEC " MOS_SD_MOUNT "/autoexec.bat");
             }
             first_session = false;
         } else {
@@ -572,7 +567,7 @@ static void mos_main_task(void *arg)
             if (f) {
                 fclose(f);
                 ESP_LOGI(TAG, "Running %s", autoexec);
-                mos_shell_exec("EXEC " MOS_FLASH_MOUNT "/autoexec.bat");
+                mos_shell_exec("EXEC " MOS_SD_MOUNT "/autoexec.bat");
             }
         }
 #endif
@@ -591,15 +586,14 @@ static void mos_main_task(void *arg)
 /* ------------------------------------------------------------------ */
 /* app_main — runs on the FreeRTOS main task (stack in LP DRAM).       */
 /*                                                                      */
-/* SPI flash operations (nvs_flash_init, esp_vfs_fat_spiflash_mount)   */
-/* assert that the calling task's stack is in LP DRAM via              */
-/* esp_task_stack_is_sane_cache_disabled().  PSRAM stacks fail this.   */
-/* So we do all flash-touching init HERE, then spawn mos_main_task     */
-/* with a large PSRAM stack for the rest (Ethernet, shell, etc.).      */
+/* nvs_flash_init() uses SPI flash and requires the calling task's     */
+/* stack to be in LP DRAM (esp_task_stack_is_sane_cache_disabled).     */
+/* SD card (SDMMC) has no such restriction — it's mounted later in     */
+/* mos_main_task with a PSRAM stack.                                   */
 /* ------------------------------------------------------------------ */
 void app_main(void)
 {
-    /* 0. NVS — must be done before WiFi and before spawning PSRAM task */
+    /* 0. NVS — must be done before WiFi; requires LP DRAM stack */
     esp_err_t nvs_err = nvs_flash_init();
     if (nvs_err == ESP_ERR_NVS_NO_FREE_PAGES ||
         nvs_err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
@@ -610,13 +604,7 @@ void app_main(void)
         ESP_LOGE(TAG, "NVS init failed: 0x%x", nvs_err);
     }
 
-    /* 1. Mount flash FAT — uses esp_partition / spi_flash (needs DRAM stack) */
-    int flash_ok = mos_fs_mount_flash();
-    if (flash_ok != 0) {
-        ESP_LOGE(TAG, "Flash FAT mount failed");
-    }
-
-     /* 2. Spawn mos_main_task with a large PSRAM stack.
+    /* 1. Spawn mos_main_task with a large PSRAM stack.
      *    CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY=y lets xTaskCreate allocate
      *    task stacks from PSRAM automatically when the requested size exceeds
      *    CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL (16KB). At 192KB xTaskCreate will
@@ -624,5 +612,5 @@ void app_main(void)
      *    xTaskCreateStatic needed, and IDF's xTaskCreate correctly uses bytes.
      */
     xTaskCreate(mos_main_task, "mos_main", MOS_MAIN_STACK_KB * 1024,
-                (void *)(intptr_t)flash_ok, 5, NULL);
+                NULL, 5, NULL);
 }
