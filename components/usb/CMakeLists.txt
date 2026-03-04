@@ -29,13 +29,13 @@ endif()
 
 if(CONFIG_SOC_USB_OTG_SUPPORTED)
     list(APPEND srcs
-        "${CMAKE_CURRENT_SOURCE_DIR}/hcd_dwc.c"       # patched: SPLIT transactions (HCSPLT)
-        "${CMAKE_CURRENT_SOURCE_DIR}/enum.c"          # patched: CHECK_SHORT_DEV_DESC fallback
-        "${CMAKE_CURRENT_SOURCE_DIR}/hub.c"           # patched: TT speed check removed
+        "${IDF_USB}/hcd_dwc.c"
+        "${CMAKE_CURRENT_SOURCE_DIR}/enum.c"          # patched
+        "${CMAKE_CURRENT_SOURCE_DIR}/hub.c"           # patched
         "${IDF_USB}/usb_helpers.c"
         "${IDF_USB}/usb_host.c"
         "${IDF_USB}/usb_private.c"
-        "${CMAKE_CURRENT_SOURCE_DIR}/usbh.c"          # patched: passes hub_addr/hub_port to HCD
+        "${IDF_USB}/usbh.c"
         "${IDF_USB}/usb_phy.c"
     )
 endif()
@@ -49,9 +49,7 @@ endif()
 
 idf_component_register(SRCS ${srcs}
                        INCLUDE_DIRS "${IDF_USB}/include"
-                       PRIV_INCLUDE_DIRS
-                           "${CMAKE_CURRENT_SOURCE_DIR}"   # for hcd_split_ext.h
-                           "${IDF_USB}/private_include"
+                       PRIV_INCLUDE_DIRS "${IDF_USB}/private_include"
                        PRIV_REQUIRES ${priv_requires}
                        KCONFIG "${IDF_USB}/Kconfig"
                        )

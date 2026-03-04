@@ -1051,9 +1051,10 @@ static bool set_next_stage(bool last_stage_pass)
                 next_stage = ENUM_STAGE_GET_SHORT_SER_STR_DESC;
                 break;
             case ENUM_STAGE_CHECK_SHORT_DEV_DESC:
-                // GET_SHORT_DEV_DESC failed — device may need a second reset
-                // (common with FS/LS devices behind a HS hub with TT).
-                ESP_LOGW(ENUM_TAG, "[%d:%d] CHECK_SHORT_DEV_DESC failed, trying SECOND_RESET",
+                // FS/LS device behind a HS hub with TT may need a second reset
+                // to respond correctly (IDF-10023 workaround). Fall through to
+                // SECOND_RESET instead of cancelling enumeration.
+                ESP_LOGW(ENUM_TAG, "[%d:%d] CHECK_SHORT_DEV_DESC failed — retrying with SECOND_RESET",
                          p_enum_driver->single_thread.parent_dev_addr,
                          p_enum_driver->single_thread.parent_port_num);
                 next_stage = ENUM_STAGE_SECOND_RESET;
@@ -1369,9 +1370,7 @@ esp_err_t enum_process(void)
         res = second_reset_request();
         break;
     case ENUM_STAGE_SECOND_RESET_COMPLETE:
-        // Second reset complete. Add delay for TT (Transaction Translator) in
-        // HS hubs to finish re-initializing the downstream FS/LS port context.
-        vTaskDelay(pdMS_TO_TICKS(100));
+        // Second reset complete
         res = ESP_OK;
         break;
     case ENUM_STAGE_CANCEL:

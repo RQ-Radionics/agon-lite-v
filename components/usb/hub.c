@@ -338,10 +338,10 @@ static void ext_port_event_callback(ext_port_hdl_t port_hdl, ext_port_event_data
             goto new_ds_dev_err;
         }
 
-        // TODO: IDF-10023 Move responsibility of parent-child tree building to Hub Driver instead of USBH
-        // NOTE: TT speed check removed — FE1.1s hub has integrated TT hardware
-        // that handles LS/FS↔HS translation. The IDF check is overly conservative
-        // for hubs with built-in TT (USB 2.0 spec section 11.23).
+        // IDF-10023: TT speed check removed — FE1.1s hub has integrated TT hardware
+        // that handles LS/FS devices transparently (USB 2.0 spec §11.23).
+        ESP_LOGI(HUB_DRIVER_TAG, "Downstream device connected at speed %d (0=LS,1=FS,2=HS)",
+                 (int)port_speed);
 
         if (dev_tree_node_new(event_data->connected.parent_dev_hdl, event_data->connected.parent_port_num, port_speed) != ESP_OK) {
             ESP_LOGE(HUB_DRIVER_TAG, "Failed to add new downstream device");
@@ -370,24 +370,20 @@ new_ds_dev_err:
 static void root_port_handle_events(hcd_port_handle_t root_port_hdl)
 {
     hcd_port_event_t port_event = hcd_port_handle_event(root_port_hdl);
-    ESP_LOGI(HUB_DRIVER_TAG, "root_port_handle_events: event=%d", (int)port_event);
     switch (port_event) {
     case HCD_PORT_EVENT_NONE:
         // Nothing to do
         break;
     case HCD_PORT_EVENT_CONNECTION: {
-        ESP_LOGI(HUB_DRIVER_TAG, "Root port CONNECTION detected — issuing reset");
         if (hcd_port_command(root_port_hdl, HCD_PORT_CMD_RESET) != ESP_OK) {
             ESP_LOGE(HUB_DRIVER_TAG, "Root port reset failed");
             goto reset_err;
         }
-        ESP_LOGI(HUB_DRIVER_TAG, "Root port reset OK");
+        ESP_LOGD(HUB_DRIVER_TAG, "Root port reset");
         usb_speed_t speed;
         if (hcd_port_get_speed(p_hub_driver_obj->constant.root_port_hdl, &speed) != ESP_OK) {
             goto new_dev_err;
         }
-        ESP_LOGI(HUB_DRIVER_TAG, "Root port connected device speed: %d (0=LOW,1=FULL,2=HIGH)",
-                 (int)speed);
 
         if (dev_tree_node_new(NULL, 0, speed) != ESP_OK) {
             ESP_LOGE(HUB_DRIVER_TAG, "Failed to add new device");
@@ -408,7 +404,6 @@ reset_err:
     case HCD_PORT_EVENT_DISCONNECTION:
     case HCD_PORT_EVENT_ERROR:
     case HCD_PORT_EVENT_OVERCURRENT: {
-        ESP_LOGI(HUB_DRIVER_TAG, "Root port event: DISCONN/ERROR/OC (event=%d)", (int)port_event);
         bool port_has_device = false;
         HUB_DRIVER_ENTER_CRITICAL();
         switch (p_hub_driver_obj->dynamic.root_port_state) {
@@ -455,7 +450,7 @@ static void root_port_req(hcd_port_handle_t root_port_hdl)
         hcd_port_command(p_hub_driver_obj->constant.root_port_hdl, HCD_PORT_CMD_DISABLE);
     }
     if (port_reqs & PORT_REQ_RECOVER) {
-        ESP_LOGI(HUB_DRIVER_TAG, "Recovering root port (POWER_ON will follow)");
+        ESP_LOGD(HUB_DRIVER_TAG, "Recovering root port");
         ESP_ERROR_CHECK(hcd_port_recover(p_hub_driver_obj->constant.root_port_hdl));
 
         // In case the port's power was turned off with usb_host_lib_set_root_port_power(false)
