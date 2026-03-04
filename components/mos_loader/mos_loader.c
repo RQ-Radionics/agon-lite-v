@@ -73,16 +73,28 @@ static inline void *dbus_to_ibus(const void *dbus_ptr)
 /* Entry point prototype for user programs */
 typedef int (*mos_entry_t)(int argc, char **argv, t_mos_api *mos);
 
-/* Stack size for user program task — in internal DRAM.
- * Must be DRAM (not PSRAM): flash driver disables cache during reads,
- * which makes PSRAM-backed stacks inaccessible → assert in cache_utils.
+/* Stack size for user program task.
  *
- * BBC BASIC bbeval/bbexec recurse deeply; each RISC-V frame saves all
- * s-registers (no register windows). Measured usage: >64KB for typical
- * BASIC programs with nested expressions. 128KB is safe.
- * ESP32-P4 has 768KB internal DRAM so this is fine. */
+ * ESP32-S3: stack MUST be in internal DRAM — flash driver disables the shared
+ * SPI bus (flash+PSRAM share one controller on S3), making PSRAM-backed stacks
+ * inaccessible during flash reads → assert in esp_task_stack_is_sane_cache_disabled.
+ *
+ * ESP32-P4: flash and PSRAM use INDEPENDENT SPI controllers
+ * (CONFIG_SOC_MEMSPI_FLASH_PSRAM_INDEPENDENT=y), so disabling the flash cache
+ * does NOT affect PSRAM access. PSRAM stacks are safe on P4.
+ * Internal DRAM is only ~108KB free after IDF init — 128KB does not fit.
+ * Use PSRAM (SPIRAM) for the task stack on P4; keep DRAM on S3.
+ *
+ * BBC BASIC bbeval/bbexec recurse deeply; 128KB is sufficient. */
 #define USER_TASK_STACK_KB   128
 #define USER_TASK_STACK_SIZE (USER_TASK_STACK_KB * 1024)
+
+#if CONFIG_IDF_TARGET_ESP32P4
+#  define USER_TASK_STACK_CAPS  (MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)
+#else
+/* ESP32-S3 and others: must use internal DRAM */
+#  define USER_TASK_STACK_CAPS  (MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)
+#endif
 
 typedef struct {
     mos_entry_t     entry;
@@ -255,9 +267,9 @@ int mos_loader_exec(const char *path, int argc, char **argv)
         return -1;
     }
 
-    /* Stack MUST be in internal DRAM — when the flash driver disables the
-     * cache to read flash sectors, any task whose stack is in PSRAM (cached)
-     * would be inaccessible, triggering esp_task_stack_is_sane_cache_disabled().
+    /* Stack allocation: see USER_TASK_STACK_CAPS above for rationale.
+     * On ESP32-P4 this is PSRAM (independent bus from flash, safe).
+     * On ESP32-S3 this is internal DRAM (shared bus, must avoid PSRAM).
      *
      * xTaskCreateWithCaps allocates TCB + stack internally using the given
      * heap caps, and FreeRTOS owns their lifetime.  We call vTaskDeleteWithCaps
@@ -271,9 +283,10 @@ int mos_loader_exec(const char *path, int argc, char **argv)
         &args,
         tskIDLE_PRIORITY + 5,
         &task,
-        MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+        USER_TASK_STACK_CAPS);
     if (created != pdPASS || !task) {
-        ESP_LOGE(TAG, "xTaskCreateWithCaps failed (%u KB internal stack)", USER_TASK_STACK_KB);
+        ESP_LOGE(TAG, "xTaskCreateWithCaps failed (%u KB %s stack)", USER_TASK_STACK_KB,
+                 (USER_TASK_STACK_CAPS & MALLOC_CAP_SPIRAM) ? "PSRAM" : "internal");
         vSemaphoreDelete(args.done);
         return -1;
     }
