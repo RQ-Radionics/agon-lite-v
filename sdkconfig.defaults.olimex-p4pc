@@ -87,6 +87,12 @@ CONFIG_MOS_KBD_HUB_RST_GPIO=21
 CONFIG_MOS_KBD_USB_DP_GPIO=27
 CONFIG_MOS_KBD_USB_DM_GPIO=26
 
+# USB hub support: FE1.1s 4-port hub sits between OTG20 HS and the keyboard.
+# HUBS_SUPPORTED enables the IDF hub driver; MULTI_LEVEL allows the single
+# level of nesting (root → FE1.1s → keyboard).
+CONFIG_USB_HOST_HUBS_SUPPORTED=y
+CONFIG_USB_HOST_HUB_MULTI_LEVEL=y
+
 # esp-hosted / WiFi coprocessor — this board has no C6 coprocessor.
 # The managed component enables itself by default; override to disable.
 # Kconfig uses "# CONFIG_x is not set" to reliably disable a boolean.
