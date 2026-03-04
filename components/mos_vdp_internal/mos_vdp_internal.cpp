@@ -775,15 +775,20 @@ static void copy_rect(int x0, int y0, int x1, int y1, int dest_x, int dest_y)
  *   [7:3] = operation, [2] = 0→fg/1→bg or invert, [1] = 0→abs/1→rel, [0] = 0→omit last/1→draw all */
 static void do_plot(uint8_t cmd, int16_t x_raw, int16_t y_raw)
 {
+    /* VDU coords are in 1/4-pixel units (Agon standard).
+     * Convert to pixel coords here; all internal state stays in pixels. */
+    int x_px = (int)x_raw >> 2;
+    int y_px = (int)y_raw >> 2;
+
     /* Determine absolute coordinates */
     int abs_x, abs_y;
     if (cmd & 0x04) {
         /* relative move */
-        abs_x = s_gfx_x + (int)x_raw;
-        abs_y = s_gfx_y + (int)y_raw;
+        abs_x = s_gfx_x + x_px;
+        abs_y = s_gfx_y + y_px;
     } else {
-        abs_x = (int)x_raw + s_gfx_origin_x;
-        abs_y = (int)y_raw + s_gfx_origin_y;
+        abs_x = x_px + s_gfx_origin_x;
+        abs_y = y_px + s_gfx_origin_y;
     }
 
     /* Save previous position */
@@ -1946,10 +1951,11 @@ static void vdu_process(uint8_t c)
     case VDU_STATE_VDU24_6: s_arg[5] = c; s_vdu_state = VDU_STATE_VDU24_7; break;
     case VDU_STATE_VDU24_7: s_arg[6] = c; s_vdu_state = VDU_STATE_VDU24_8; break;
     case VDU_STATE_VDU24_8: {
-        int16_t x0 = (int16_t)(s_arg[0] | (s_arg[1] << 8));
-        int16_t y0 = (int16_t)(s_arg[2] | (s_arg[3] << 8));
-        int16_t x1 = (int16_t)(s_arg[4] | (s_arg[5] << 8));
-        int16_t y1 = (int16_t)(s_arg[6] | (c << 8));
+        /* VDU 24 coords are in 1/4-pixel VDU units — convert to pixels */
+        int16_t x0 = (int16_t)(s_arg[0] | (s_arg[1] << 8)) >> 2;
+        int16_t y0 = (int16_t)(s_arg[2] | (s_arg[3] << 8)) >> 2;
+        int16_t x1 = (int16_t)(s_arg[4] | (s_arg[5] << 8)) >> 2;
+        int16_t y1 = (int16_t)(s_arg[6] | (c << 8)) >> 2;
         /* Agon coords: x0,y0 = bottom-left, x1,y1 = top-right (pixels)
          * Convert to screen space (y flipped) */
         int sx0 = (int)x0, sx1 = (int)x1;
@@ -2006,8 +2012,9 @@ static void vdu_process(uint8_t c)
     case VDU_STATE_VDU29_2: s_arg[1] = c; s_vdu_state = VDU_STATE_VDU29_3; break;
     case VDU_STATE_VDU29_3: s_arg[2] = c; s_vdu_state = VDU_STATE_VDU29_4; break;
     case VDU_STATE_VDU29_4:
-        s_gfx_origin_x = (int)(int16_t)(s_arg[0] | (s_arg[1] << 8));
-        s_gfx_origin_y = (int)(int16_t)(s_arg[2] | (c << 8));
+        /* VDU 29 coords are in 1/4-pixel VDU units — convert to pixels */
+        s_gfx_origin_x = (int)(int16_t)(s_arg[0] | (s_arg[1] << 8)) >> 2;
+        s_gfx_origin_y = (int)(int16_t)(s_arg[2] | (c << 8)) >> 2;
         s_vdu_state = VDU_STATE_NORMAL;
         break;
 
