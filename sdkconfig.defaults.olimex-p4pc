@@ -9,10 +9,11 @@
 #   SD:    SDMMC slot 0, GPIO 39-44, PWR GPIO 45 (active LOW)
 #   Audio: ES8311 codec, I2C1 GPIO7/8, I2S0 GPIO9-13
 
-# Main task stack — BBC BASIC (bbeval/bbexec) recurse deeply on RISC-V ABI.
-# On RISC-V the ABI uses more stack than Xtensa; vfprintf alone can consume
-# several KB. 64KB gives comfortable headroom for boot + Ethernet init + shell.
-CONFIG_ESP_MAIN_TASK_STACK_SIZE=65536
+# Main task stack — app_main() only does NVS init, flash mount, and spawns
+# mos_main_task with a 192KB PSRAM stack. It needs very little stack itself.
+# 8KB matches the base sdkconfig.defaults value and avoids heap fragmentation
+# that caused xTaskCreatePinnedToCore to return pdFAIL with the 65KB value.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
 
 # Chip revision: Olimex uses ESP32-P4NRW32 rev 1.x silicon
 # v1.x and v3.x are mutually exclusive silicon families; select <v3 mode.
