@@ -139,14 +139,14 @@ static esp_err_t lt8912b_write_init_config(void)
     return ret;
 }
 
-/* Step 2: MIPI DSI basic config — 2 lanes, settle=4 (ADDR_CEC_DSI = 0x49) */
+/* Step 2: MIPI DSI basic config — 2 lanes, settle (ADDR_CEC_DSI = 0x49) */
 static esp_err_t lt8912b_write_mipi_basic(void)
 {
     i2c_master_dev_handle_t d = s_lt.dev_cec_dsi;
     esp_err_t ret = ESP_OK;
 
     ESP_RETURN_ON_ERROR(lt_write(d, 0x10, 0x01), TAG, "mipi 0x10");
-    ESP_RETURN_ON_ERROR(lt_write(d, 0x11, 0x08), TAG, "mipi 0x11"); /* settle: <=600→0x04, 768→0x08, 1080→0x0a */
+    ESP_RETURN_ON_ERROR(lt_write(d, 0x11, 0x10), TAG, "mipi 0x11"); /* settle: Olimex BSP value for 1024×768 */
     ESP_RETURN_ON_ERROR(lt_write(d, 0x12, 0x04), TAG, "mipi 0x12");
     ESP_RETURN_ON_ERROR(lt_write(d, 0x13, 0x02), TAG, "mipi 0x13"); /* 0x02 = 2 lanes */
     ESP_RETURN_ON_ERROR(lt_write(d, 0x14, 0x00), TAG, "mipi 0x14");
@@ -159,18 +159,22 @@ static esp_err_t lt8912b_write_mipi_basic(void)
 
 /* Step 3: Video timing — 1024×768@60Hz (ADDR_CEC_DSI = 0x49)
  *
- * VESA 1024×768@60Hz:
- *   hact=1024 htotal=1344 hfp=24  hs=136 hbp=160
- *   vact=768  vtotal=806  vfp=3   vs=6   vbp=29
- *   pclk=65.0 MHz, hsync=negative, vsync=negative
+ * Olimex BSP-validated timings (NOT VESA — different htotal/vtotal/syncs):
+ *   hact=1024 htotal=1184 hfp=48  hs=32  hbp=80
+ *   vact=768  vtotal=790  vfp=3   vs=4   vbp=15
+ *   pclk=56 MHz, hsync=positive (h_polarity=1), vsync=negative (v_polarity=0)
+ *
+ * Sync polarity register 0xAB (ADDR_MAIN):
+ *   bit1 = H polarity (1=positive), bit0 = V polarity (1=positive)
+ *   → h_pol=1, v_pol=0 → 0x02
  */
 static esp_err_t lt8912b_write_video_timing(void)
 {
     i2c_master_dev_handle_t d = s_lt.dev_cec_dsi;
 
     /* Sync widths */
-    ESP_RETURN_ON_ERROR(lt_write(d, 0x18, 136),             TAG, "vt hs");
-    ESP_RETURN_ON_ERROR(lt_write(d, 0x19, 6),               TAG, "vt vs");
+    ESP_RETURN_ON_ERROR(lt_write(d, 0x18, 32),              TAG, "vt hs");
+    ESP_RETURN_ON_ERROR(lt_write(d, 0x19, 4),               TAG, "vt vs");
 
     /* H active */
     ESP_RETURN_ON_ERROR(lt_write(d, 0x1C, 1024 & 0xFF),    TAG, "vt hact_l");
@@ -180,31 +184,31 @@ static esp_err_t lt8912b_write_video_timing(void)
     ESP_RETURN_ON_ERROR(lt_write(d, 0x2F, 0x0C),            TAG, "vt fifo");
 
     /* H total */
-    ESP_RETURN_ON_ERROR(lt_write(d, 0x34, 1344 & 0xFF),    TAG, "vt htot_l");
-    ESP_RETURN_ON_ERROR(lt_write(d, 0x35, 1344 >> 8),      TAG, "vt htot_h");
+    ESP_RETURN_ON_ERROR(lt_write(d, 0x34, 1184 & 0xFF),    TAG, "vt htot_l");
+    ESP_RETURN_ON_ERROR(lt_write(d, 0x35, 1184 >> 8),      TAG, "vt htot_h");
 
     /* V total */
-    ESP_RETURN_ON_ERROR(lt_write(d, 0x36, 806 & 0xFF),     TAG, "vt vtot_l");
-    ESP_RETURN_ON_ERROR(lt_write(d, 0x37, 806 >> 8),       TAG, "vt vtot_h");
+    ESP_RETURN_ON_ERROR(lt_write(d, 0x36, 790 & 0xFF),     TAG, "vt vtot_l");
+    ESP_RETURN_ON_ERROR(lt_write(d, 0x37, 790 >> 8),       TAG, "vt vtot_h");
 
     /* VBP */
-    ESP_RETURN_ON_ERROR(lt_write(d, 0x38, 29 & 0xFF),      TAG, "vt vbp_l");
-    ESP_RETURN_ON_ERROR(lt_write(d, 0x39, 29 >> 8),        TAG, "vt vbp_h");
+    ESP_RETURN_ON_ERROR(lt_write(d, 0x38, 15 & 0xFF),      TAG, "vt vbp_l");
+    ESP_RETURN_ON_ERROR(lt_write(d, 0x39, 15 >> 8),        TAG, "vt vbp_h");
 
     /* VFP */
     ESP_RETURN_ON_ERROR(lt_write(d, 0x3A, 3 & 0xFF),       TAG, "vt vfp_l");
     ESP_RETURN_ON_ERROR(lt_write(d, 0x3B, 3 >> 8),         TAG, "vt vfp_h");
 
     /* HBP */
-    ESP_RETURN_ON_ERROR(lt_write(d, 0x3C, 160 & 0xFF),     TAG, "vt hbp_l");
-    ESP_RETURN_ON_ERROR(lt_write(d, 0x3D, 160 >> 8),       TAG, "vt hbp_h");
+    ESP_RETURN_ON_ERROR(lt_write(d, 0x3C, 80 & 0xFF),      TAG, "vt hbp_l");
+    ESP_RETURN_ON_ERROR(lt_write(d, 0x3D, 80 >> 8),        TAG, "vt hbp_h");
 
     /* HFP */
-    ESP_RETURN_ON_ERROR(lt_write(d, 0x3E, 24 & 0xFF),      TAG, "vt hfp_l");
-    ESP_RETURN_ON_ERROR(lt_write(d, 0x3F, 24 >> 8),        TAG, "vt hfp_h");
+    ESP_RETURN_ON_ERROR(lt_write(d, 0x3E, 48 & 0xFF),      TAG, "vt hfp_l");
+    ESP_RETURN_ON_ERROR(lt_write(d, 0x3F, 48 >> 8),        TAG, "vt hfp_h");
 
-    /* Sync polarity: 1024×768 = both negative → bits[1:0] = 0x00 (ADDR_MAIN) */
-    ESP_RETURN_ON_ERROR(lt_write(s_lt.dev_main, 0xAB, 0x00), TAG, "vt pol");
+    /* Sync polarity: h_polarity=1 (positive), v_polarity=0 (negative) → 0x02 */
+    ESP_RETURN_ON_ERROR(lt_write(s_lt.dev_main, 0xAB, 0x02), TAG, "vt pol");
 
     return ESP_OK;
 }

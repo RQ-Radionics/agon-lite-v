@@ -76,12 +76,13 @@ CONFIG_LT8912B_SCL_GPIO=8
 CONFIG_LT8912B_HPD_GPIO=15
 CONFIG_LT8912B_HDMI_MODE=y
 CONFIG_LT8912B_DSI_LANES=2
-# 1024×768@60Hz: htotal=1344, vtotal=806, pclk=65 MHz, both sync negative
-# 1024×768@60Hz: pclk=65 MHz, VESA standard
+# 1024×768@60Hz (Olimex BSP-validated timings — NOT VESA):
+#   pclk=56 MHz, htotal=1184 (hfp=48 hs=32 hbp=80), vtotal=790 (vfp=3 vs=4 vbp=15)
+#   h_polarity=1 (positive), v_polarity=0 (negative)
 # IDF DPI clk = lane_mbps/8 / round(lane_mbps/8 / pclk)
-# Need exact 65 MHz: lane=1040 → byte=130 MHz → div=2 → real=65.000 MHz (exact)
-# Bandwidth check: 65 MHz × 24 / 2 lanes = 780 Mbps < 1040 Mbps ✓
-CONFIG_LT8912B_DSI_LANE_MBPS=1040
+# lane=1000 → byte=125 MHz → div=round(125/56)=2 → real=62.5 MHz (~11% error)
+# This is what the Olimex BSP uses and it works on hardware.
+CONFIG_LT8912B_DSI_LANE_MBPS=1000
 
 # mos_kbd component — USB HID keyboard via IDF usb_host (no managed component)
 CONFIG_MOS_KBD_ENABLED=y
