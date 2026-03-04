@@ -1160,19 +1160,48 @@ static void vdp_render_task(void *arg)
 
 static void mode_set(uint8_t mode)
 {
+    /* Agon screen mode table (VDP 1.04+).
+     * Indexed by base mode number (bits[6:0]); bit 7 = double-buffer flag.
+     * Modes 19-30 are §/§§ extended modes; mode 7 is teletext (no raster). */
     static const struct { int w; int h; uint8_t colours; } mode_dims[] = {
-        {640,480,16},{640,480,16},{640,480,16}, /* 0-2  */
-        {640,240,16},{640,240,16},{640,240,16},{640,240,16}, /* 3-6  */
-        {640,480, 8},                           /* 7    teletext fallback */
-        {320,240,64},{320,240,64},{320,240,64},{320,240,64}, /* 8-11 */
-        {320,200,16},{320,200,16},{320,200,16},{320,200,16}, /* 12-15 */
-        {800,600, 4},{800,600, 4},{800,600, 4}, /* 16-18 */
+        /* 0 */ {640, 480, 16},
+        /* 1 */ {640, 480,  4},
+        /* 2 */ {640, 480,  2},
+        /* 3 */ {640, 240, 64},
+        /* 4 */ {640, 240, 16},
+        /* 5 */ {640, 240,  4},
+        /* 6 */ {640, 240,  2},
+        /* 7 */ {640, 480, 16},  /* teletext — no native raster, fall back to 640×480 */
+        /* 8 */ {320, 240, 64},
+        /* 9 */ {320, 240, 16},
+        /*10 */ {320, 240,  4},
+        /*11 */ {320, 240,  2},
+        /*12 */ {320, 200, 64},
+        /*13 */ {320, 200, 16},
+        /*14 */ {320, 200,  4},
+        /*15 */ {320, 200,  2},
+        /*16 */ {800, 600,  4},
+        /*17 */ {800, 600,  2},
+        /*18 */ {1024,768,  2},
+        /*19 */ {1024,768,  4},
+        /*20 */ {512, 384, 64},
+        /*21 */ {512, 384, 16},
+        /*22 */ {512, 384,  4},
+        /*23 */ {512, 384,  2},
+        /*24 */ {640, 512, 16},
+        /*25 */ {640, 512,  4},
+        /*26 */ {640, 512,  2},
+        /*27 */ {640, 256, 64},
+        /*28 */ {640, 256, 16},
+        /*29 */ {640, 256,  4},
+        /*30 */ {640, 256,  2},
     };
-    int m = (int)mode;
-    if (m < 0 || m > 18) m = 0;
+    /* bit 7 = double-buffer; base mode is bits[6:0] */
+    int m = (int)(mode & 0x7F);
+    if (m >= (int)(sizeof(mode_dims)/sizeof(mode_dims[0]))) m = 0;
     s_mode_w       = mode_dims[m].w;
     s_mode_h       = mode_dims[m].h;
-    s_mode_num     = (uint8_t)m;
+    s_mode_num     = mode;          /* preserve double-buffer bit for 0x86 response */
     s_mode_colours = mode_dims[m].colours;
     scale_update();
     palette_reset();
