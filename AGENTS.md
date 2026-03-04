@@ -156,7 +156,7 @@ ample room in the 96KB remaining after init allocations.
 
 **Never raise this back to 65536** — it will crash on every cold boot.
 
-## Current State (session end 2026-03-04, session 4)
+## Current State (session end 2026-03-04, session 5)
 
 ### Fully working ✅ (Waveshare ESP32-P4-WIFI6)
 - VDP handshake, color banner, mode 16
@@ -210,8 +210,28 @@ ample room in the 96KB remaining after init allocations.
   resolution in PSRAM framebuffer and the MIPI DSI stream always outputs 640×480
 - High-res modes (800×600, 1024×768) are deferred — issue esp32-mos-agw
 
+### SD-only storage — CRITICAL fix (commit d0f0073, session 5)
+
+The `flash_io_task` proxy (commits 1aebb3f–21259db) was reverted. Root cause:
+`esp_task_stack_is_sane_cache_disabled()` is a hard assert in IDF that fires when
+a PSRAM-stack task touches the SPI flash FAT driver. No Kconfig disables it on P4.
+
+**Fix**: Remove the internal flash FAT partition entirely. SD card (SDMMC) has no
+such restriction — it uses its own bus with no cache coherency dance.
+
+- `partitions.csv`: `storage` (4M FAT) removed, `factory` app grown to 6M
+- `MOS_FLASH_MOUNT` is now an alias for `MOS_SD_MOUNT` (`/sdcard`) for source compat
+- `A:` and `B:` both resolve to `/sdcard` (only one physical drive exists)
+- `app_main()` now only does NVS init; SD is mounted in `mos_main_task` (PSRAM stack)
+- `wear_levelling` / `esp_partition` removed from `mos_fs` CMakeLists
+
+**Consequence for Waveshare board**: The Waveshare build also no longer has a flash
+FAT partition. All files must be on SD card. `flash_data.sh` no longer needs to
+flash the storage partition (only the firmware binary).
+
 ### Next areas to work on
-- **Hardware test**: verificar HDMI, audio y teclado en hardware real (ahora que arranca)
+- **Hardware test on Olimex**: verify HDMI, audio, keyboard now that the display-black
+  bug (caused by the proxy) should be gone
 - **`mos_vdp_internal`** — port console8 C++ VDP core as IDF component (esp32-mos-hfq)
   - Once done, replace `mos_kbd_scancode_stub` in `main.c` with
     `mos_vdp_internal_send_scancode()` — the stub is clearly marked with TODO comment
