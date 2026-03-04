@@ -40,6 +40,7 @@
 #include "esp_lcd_mipi_dsi.h"
 #include "esp_cache.h"
 #include "esp_heap_caps.h"
+#include "esp_timer.h"
 
 #include "vdp_font.h"
 #include "mos_audio_synth.h"
@@ -341,6 +342,23 @@ static esp_lcd_panel_handle_t s_panel = NULL;
 static uint8_t *s_fb[2] = { NULL, NULL };
 static SemaphoreHandle_t s_fb_mutex = NULL;
 
+/* Dirty flag: set by any CPU write to the framebuffer.
+ * The periodic flush timer reads this and does the cache_msync + draw_bitmap
+ * at ~60 Hz, decoupling PLOT throughput from display refresh. */
+static volatile bool s_fb_dirty = false;
+static esp_timer_handle_t s_flush_timer = NULL;
+
+static void fb_flush_timer_cb(void *arg)
+{
+    if (!s_fb_dirty) return;
+    if (!s_panel || !s_fb[0]) return;
+    s_fb_dirty = false;
+    if (s_num_active_sprites > 0) {
+        sprites_render(s_fb[0]);
+    }
+    esp_lcd_panel_draw_bitmap(s_panel, 0, 0, FB_W, FB_H, s_fb[0]);
+}
+
 /* ------------------------------------------------------------------ */
 /* GCOL paint mode                                                      */
 /*  0 = Set (replace), 1 = OR, 2 = AND, 3 = XOR, 4 = Invert dest      */
@@ -417,10 +435,18 @@ static void fb_plot_pixel(int x, int y, rgb888_t c, int gcol_mode = 0)
     }
 }
 
-static void fb_flush(void)
+/* Mark FB dirty — the periodic timer will push it to the display at ~60 Hz.
+ * Use fb_flush_now() for operations where immediate visibility is needed
+ * (text, CLS, mode change). */
+static inline void fb_flush(void)
+{
+    s_fb_dirty = true;
+}
+
+static void fb_flush_now(void)
 {
     if (!s_panel || !s_fb[0]) return;
-    /* Render active sprites on top of the framebuffer before DMA transfer */
+    s_fb_dirty = false;
     if (s_num_active_sprites > 0) {
         sprites_render(s_fb[0]);
     }
@@ -1293,7 +1319,7 @@ static void mode_set(uint8_t mode)
     bitmaps_reset_all();
     clear_screen();
     s_col = 0; s_row = 0;
-    fb_flush();
+    fb_flush_now();
     /* Notify MOS of mode change */
     send_mode_information();
 }
@@ -1309,7 +1335,7 @@ static void vdu_process(uint8_t c)
         if (c >= 0x20 && c != 0x7F) {
             draw_char(s_col, s_row, c);
             cursor_advance();
-            fb_flush();
+            fb_flush_now();
             return;
         }
         switch (c) {
@@ -1334,7 +1360,7 @@ static void vdu_process(uint8_t c)
             break;
         case 0x0A: /* VDU 10 — LF */
             newline();
-            fb_flush();
+            fb_flush_now();
             break;
         case 0x0B: /* VDU 11 — cursor up */
             if (s_row > s_vp_top) s_row--;
@@ -1343,7 +1369,7 @@ static void vdu_process(uint8_t c)
             clear_screen();
             s_col = s_vp_left;
             s_row = s_vp_top;
-            fb_flush();
+            fb_flush_now();
             break;
         case 0x0D: /* VDU 13 — CR */
             s_col = s_vp_left;
@@ -1352,7 +1378,7 @@ static void vdu_process(uint8_t c)
         case 0x0F: /* VDU 15 — page mode off (ignored) */  break;
         case 0x10: /* VDU 16 — CLG (clear graphics viewport in gbg colour) */
             clear_graphics_viewport(s_gfx_bg);
-            fb_flush();
+            fb_flush_now();
             break;
         case 0x11: /* VDU 17 — COLOUR n */
             s_vdu_state = VDU_STATE_VDU17;
@@ -1416,12 +1442,12 @@ static void vdu_process(uint8_t c)
             if (s_col > s_vp_left) {
                 s_col--;
                 erase_char(s_col, s_row);
-                fb_flush();
+                fb_flush_now();
             } else if (s_row > s_vp_top) {
                 s_row--;
                 s_col = s_vp_right;
                 erase_char(s_col, s_row);
-                fb_flush();
+                fb_flush_now();
             }
             break;
         default:
@@ -2284,6 +2310,23 @@ esp_err_t mos_vdp_internal_init(esp_lcd_panel_handle_t dpi_panel)
     if (!s_fb_mutex) {
         ESP_LOGE(TAG, "Failed to create framebuffer mutex");
         return ESP_ERR_NO_MEM;
+    }
+
+    /* Periodic flush timer: push dirty framebuffer to display at ~60 Hz.
+     * This decouples PLOT throughput from cache_msync cost — individual
+     * PLOT commands just mark s_fb_dirty; the timer does the actual sync. */
+    esp_timer_create_args_t timer_args = {
+        .callback        = fb_flush_timer_cb,
+        .arg             = NULL,
+        .dispatch_method = ESP_TIMER_TASK,
+        .name            = "vdp_flush",
+        .skip_unhandled_events = true,
+    };
+    esp_err_t terr = esp_timer_create(&timer_args, &s_flush_timer);
+    if (terr == ESP_OK) {
+        esp_timer_start_periodic(s_flush_timer, 16667); /* ~60 Hz */
+    } else {
+        ESP_LOGW(TAG, "Failed to create flush timer (0x%x) — falling back to per-PLOT flush", terr);
     }
 
     BaseType_t ok = xTaskCreatePinnedToCore(
