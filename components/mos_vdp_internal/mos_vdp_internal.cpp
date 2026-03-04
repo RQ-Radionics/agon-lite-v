@@ -305,8 +305,8 @@ static void bitmap_draw_to_fb(uint8_t *fb, uint8_t id, int bx, int by, uint8_t p
     }
 }
 
-/* Render all active sprites onto fb (called from render task before flip) */
-static void sprites_render(uint8_t *fb)
+/* Render all active sprites onto fb (called before display flip) */
+static void __attribute__((unused)) sprites_render(uint8_t *fb)
 {
     for (int i = 0; i < (int)s_num_active_sprites; i++) {
         sprite_t *sp = &s_sprites[i];
@@ -351,12 +351,17 @@ static esp_timer_handle_t s_flush_timer = NULL;
 static void fb_flush_timer_cb(void *arg)
 {
     if (!s_fb_dirty) return;
-    if (!s_panel || !s_fb[0]) return;
+    if (!s_fb[0]) return;
     s_fb_dirty = false;
-    if (s_num_active_sprites > 0) {
-        sprites_render(s_fb[0]);
-    }
-    esp_lcd_panel_draw_bitmap(s_panel, 0, 0, FB_W, FB_H, s_fb[0]);
+    /* The DPI controller reads s_fb[0] directly via DW-GDMA each vsync.
+     * We only need to writeback the CPU dcache to PSRAM so the DMA sees
+     * the latest pixels.  No draw_bitmap needed — that is only for
+     * external buffers.  Calling draw_bitmap from a timer ISR context
+     * while the render task also writes the FB causes DMA descriptor
+     * corruption.  esp_cache_msync C2M+UNALIGNED is safe from any task. */
+    esp_cache_msync(s_fb[0], FB_SIZE,
+        ESP_CACHE_MSYNC_FLAG_DIR_C2M |
+        ESP_CACHE_MSYNC_FLAG_UNALIGNED);
 }
 
 /* ------------------------------------------------------------------ */
@@ -445,12 +450,11 @@ static inline void fb_flush(void)
 
 static void fb_flush_now(void)
 {
-    if (!s_panel || !s_fb[0]) return;
+    if (!s_fb[0]) return;
     s_fb_dirty = false;
-    if (s_num_active_sprites > 0) {
-        sprites_render(s_fb[0]);
-    }
-    esp_lcd_panel_draw_bitmap(s_panel, 0, 0, FB_W, FB_H, s_fb[0]);
+    esp_cache_msync(s_fb[0], FB_SIZE,
+        ESP_CACHE_MSYNC_FLAG_DIR_C2M |
+        ESP_CACHE_MSYNC_FLAG_UNALIGNED);
 }
 
 /* ------------------------------------------------------------------ */
