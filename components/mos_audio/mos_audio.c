@@ -64,6 +64,20 @@ static esp_err_t audio_i2s_init(void)
 
     ESP_RETURN_ON_ERROR(
         i2s_channel_init_std_mode(s_i2s_tx, &std_cfg), TAG, "i2s_init TX");
+    /* Pre-load all DMA TX buffers with silence before enabling the channel.
+     * Without this, uninitialised DMA buffer memory is sent to the ES8311
+     * DAC as white noise from the moment i2s_channel_enable() is called
+     * until the synth task writes its first real buffer.
+     * i2s_channel_preload_data() fills DMA descriptors while the channel
+     * is still disabled; the codec only ever sees zeros at rest. */
+    {
+        static const int16_t silence[256] = {0};
+        size_t loaded = 0;
+        /* Keep calling until preload returns 0 bytes loaded (DMA full) */
+        do {
+            i2s_channel_preload_data(s_i2s_tx, silence, sizeof(silence), &loaded);
+        } while (loaded > 0);
+    }
     ESP_RETURN_ON_ERROR(
         i2s_channel_enable(s_i2s_tx), TAG, "i2s_enable TX");
     ESP_RETURN_ON_ERROR(
@@ -217,6 +231,12 @@ esp_err_t mos_audio_set_volume(int volume)
 i2s_chan_handle_t mos_audio_get_tx_handle(void)
 {
     return s_initialized ? s_i2s_tx : NULL;
+}
+
+esp_err_t mos_audio_enable_tx(void)
+{
+    if (!s_initialized || !s_i2s_tx) return ESP_ERR_INVALID_STATE;
+    return i2s_channel_enable(s_i2s_tx);
 }
 
 void mos_audio_deinit(void)

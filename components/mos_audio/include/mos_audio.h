@@ -88,6 +88,18 @@ esp_err_t mos_audio_set_volume(int volume);
 i2s_chan_handle_t mos_audio_get_tx_handle(void);
 
 /**
+ * @brief Enable the I2S TX channel (start DMA output to DAC).
+ *
+ * The TX channel is intentionally left disabled after mos_audio_init() to
+ * avoid sending uninitialised DMA buffer contents (white noise) before the
+ * synth task has pre-loaded silence.  Call this once, from the synth task,
+ * immediately after writing the first buffer of zeros.
+ *
+ * @return ESP_OK on success, ESP_ERR_INVALID_STATE if not initialized.
+ */
+esp_err_t mos_audio_enable_tx(void);
+
+/**
  * @brief De-initialize and release all audio resources.
  */
 void mos_audio_deinit(void);
