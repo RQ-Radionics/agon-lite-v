@@ -120,7 +120,11 @@ static esp_err_t audio_codec_init(i2c_master_bus_handle_t bus)
     es8311_codec_cfg_t es8311_cfg = {
         .ctrl_if      = i2c_ctrl_if,
         .gpio_if      = gpio_if,
-        .codec_mode   = ESP_CODEC_DEV_TYPE_OUT,
+        /* DAC-only: do NOT enable ADC.  The Olimex ESP32-P4-PC has no
+         * microphone connected to the ES8311 AINL/AINR pins — enabling
+         * the ADC with floating inputs causes continuous white noise that
+         * is injected into the DAC output path. */
+        .codec_mode   = ESP_CODEC_DEV_WORK_MODE_DAC,
         .pa_pin       = CONFIG_MOS_AUDIO_PA_GPIO,
         .pa_reverted  = false,
         .master_mode  = false,
@@ -134,7 +138,8 @@ static esp_err_t audio_codec_init(i2c_master_bus_handle_t bus)
     ESP_RETURN_ON_FALSE(es8311_dev, ESP_ERR_NOT_FOUND, TAG, "es8311_codec_new");
 
     esp_codec_dev_cfg_t dev_cfg = {
-        .dev_type  = ESP_CODEC_DEV_TYPE_IN_OUT,
+        /* Output only — no ADC capture needed */
+        .dev_type  = ESP_CODEC_DEV_TYPE_OUT,
         .codec_if  = es8311_dev,
         .data_if   = s_i2s_data_if,
     };
