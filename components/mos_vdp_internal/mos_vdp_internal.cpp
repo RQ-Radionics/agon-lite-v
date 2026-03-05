@@ -526,14 +526,10 @@ static void fb_flush_now(void)
 {
     if (!fb_draw()) return;
     s_fb_dirty = false;
-    /* Sync draw buffer cache → PSRAM so the DPI DMA reads fresh pixels.
-     * Then update cur_fb_index directly (atomic byte store) so the DW-GDMA
-     * ISR switches to this buffer on the next frame start.
-     * We do NOT call draw_bitmap: it fires on_color_trans_done which
-     * reprograms the DMA channel, racing with the running ISR → crash. */
+    /* Sync draw buffer cache → PSRAM so the DPI DMA reads fresh pixels. */
     esp_cache_msync(fb_draw(), FB_SIZE, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
-    if (s_panel)
-        dpi_set_cur_fb(s_panel, (uint8_t)s_draw_buf_idx);
+    /* NOTE: dpi_set_cur_fb disabled until offset is verified from boot dump */
+    // if (s_panel) dpi_set_cur_fb(s_panel, (uint8_t)s_draw_buf_idx);
 }
 
 /* Flip double buffers: sync back → PSRAM, point DPI at it, swap indices.
@@ -543,8 +539,8 @@ static void fb_flip_now(void)
     if (!s_panel || !fb_draw()) return;
     s_fb_dirty = false;
     esp_cache_msync(fb_draw(), FB_SIZE, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
-    dpi_set_cur_fb(s_panel, (uint8_t)s_draw_buf_idx);
-    /* Switch render target to the other buffer for next frame */
+    /* NOTE: dpi_set_cur_fb disabled until offset is verified from boot dump */
+    // dpi_set_cur_fb(s_panel, (uint8_t)s_draw_buf_idx);
     s_draw_buf_idx ^= 1;
 }
 
@@ -2375,14 +2371,20 @@ esp_err_t mos_vdp_internal_init(esp_lcd_panel_handle_t dpi_panel)
             s_fb[1] = (uint8_t *)fb1;
             ESP_LOGI(TAG, "Framebuffers: fb0=%p fb1=%p (%u bytes each)",
                      s_fb[0], s_fb[1], (unsigned)FB_SIZE);
-            /* Verify dpi_set_cur_fb offset — reads cur_fb_index back and checks
-             * that it matches the known initial value (0 after panel_enable). */
-            dpi_set_cur_fb(s_panel, 0);
-            uint8_t readback = *((volatile uint8_t *)((uintptr_t)s_panel + 11*sizeof(void*)+1));
-            if (readback != 0) {
-                ESP_LOGE(TAG, "dpi_set_cur_fb offset WRONG (readback=%d) — struct layout changed!", readback);
-            } else {
-                ESP_LOGI(TAG, "dpi_set_cur_fb offset verified OK");
+            /* Dump first 64 bytes of the DPI panel struct so we can identify
+             * the layout and find cur_fb_index (should be 0 at startup,
+             * preceded by virtual_channel=0, after bus ptr and base vtable). */
+            {
+                volatile uint8_t *raw = (volatile uint8_t *)s_panel;
+                ESP_LOGI(TAG, "DPI panel struct @ %p:", s_panel);
+                for (int _i = 0; _i < 64; _i += 16) {
+                    ESP_LOGI(TAG, "  +%02d: %02x %02x %02x %02x  %02x %02x %02x %02x  %02x %02x %02x %02x  %02x %02x %02x %02x",
+                        _i,
+                        raw[_i+ 0], raw[_i+ 1], raw[_i+ 2], raw[_i+ 3],
+                        raw[_i+ 4], raw[_i+ 5], raw[_i+ 6], raw[_i+ 7],
+                        raw[_i+ 8], raw[_i+ 9], raw[_i+10], raw[_i+11],
+                        raw[_i+12], raw[_i+13], raw[_i+14], raw[_i+15]);
+                }
             }
         }
     } else {
