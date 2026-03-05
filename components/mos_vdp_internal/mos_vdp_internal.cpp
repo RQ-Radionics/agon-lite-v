@@ -341,6 +341,11 @@ static void bitmaps_reset_all(void)
 static esp_lcd_panel_handle_t s_panel = NULL;
 static uint8_t *s_fb[2] = { NULL, NULL };
 static SemaphoreHandle_t s_fb_mutex = NULL;
+/* Double-buffer support: s_draw_buf_idx is the back buffer (render target).
+ * The DPI controller always reads the *other* buffer (front).
+ * Starts at 0; flip_buffer() swaps after syncing the back buffer. */
+static int s_draw_buf_idx = 0;
+static inline uint8_t *fb_draw(void) { return s_fb[s_draw_buf_idx]; }
 
 /* Dirty flag: set by any CPU write to the framebuffer.
  * The periodic flush timer reads this and does the cache_msync + draw_bitmap
@@ -400,7 +405,7 @@ static bool s_cursor_visible = true;
 static inline void fb_plot_pixel_raw(int phys_x, int phys_y, rgb888_t c)
 {
     if ((unsigned)phys_x >= (unsigned)FB_W || (unsigned)phys_y >= (unsigned)FB_H) return;
-    uint8_t *p = s_fb[0] + (phys_y * FB_W + phys_x) * BYTES_PER_PIX;
+    uint8_t *p = fb_draw() + (phys_y * FB_W + phys_x) * BYTES_PER_PIX;
     p[0] = c.r; p[1] = c.g; p[2] = c.b;
 }
 
@@ -408,7 +413,7 @@ static inline rgb888_t fb_read_pixel_raw(int phys_x, int phys_y)
 {
     if ((unsigned)phys_x >= (unsigned)FB_W || (unsigned)phys_y >= (unsigned)FB_H)
         return {0,0,0};
-    uint8_t *p = s_fb[0] + (phys_y * FB_W + phys_x) * BYTES_PER_PIX;
+    uint8_t *p = fb_draw() + (phys_y * FB_W + phys_x) * BYTES_PER_PIX;
     return {p[0], p[1], p[2]};
 }
 
@@ -452,7 +457,7 @@ static void fb_fill_hspan(int x0, int x1, int y, rgb888_t c, int gcol_mode)
     for (int dy = 0; dy < s_scale; dy++) {
         int py = phys_y0 + dy;
         if ((unsigned)py >= (unsigned)FB_H) break;
-        uint8_t *row = s_fb[0] + (py * FB_W + phys_x0) * BYTES_PER_PIX;
+        uint8_t *row = fb_draw() + (py * FB_W + phys_x0) * BYTES_PER_PIX;
         /* Write 3-byte pixels; use loop (RGB888 — can't memset directly) */
         uint8_t *p = row;
         for (int i = 0; i < phys_w; i++) {
@@ -472,17 +477,28 @@ static inline void fb_flush(void)
 
 static void fb_flush_now(void)
 {
-    if (!s_fb[0]) return;
+    if (!fb_draw()) return;
     s_fb_dirty = false;
-    /* The DPI controller streams s_fb[0] to the display via DW-GDMA
-     * continuously.  We must NOT call draw_bitmap: on P4 it invokes
-     * on_color_trans_done which reprograms the DMA channel, racing with
-     * the running ISR and corrupting chan->group (Load access fault).
-     *
-     * FB_SIZE = 800×600×3 = 2,359,296 bytes, a multiple of the 64-byte
-     * L2 cache line — so UNALIGNED is not needed and the sync range is
-     * exactly the framebuffer with no spillover into adjacent DMA structs. */
-    esp_cache_msync(s_fb[0], FB_SIZE, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
+    /* Flush the back buffer (draw target) to physical PSRAM so the DPI DMA
+     * sees the updated pixels.  We use cache_msync C2M (no draw_bitmap) to
+     * avoid racing with the dw_gdma ISR. */
+    esp_cache_msync(fb_draw(), FB_SIZE, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
+}
+
+/* Flip double buffers: sync back → PSRAM, tell DPI to switch to it,
+ * then make the old front the new back.
+ * Must be called from render task context (NOT from ISR/timer). */
+static void fb_flip_now(void)
+{
+    if (!s_panel || !fb_draw()) return;
+    s_fb_dirty = false;
+    /* Sync back buffer to PSRAM */
+    esp_cache_msync(fb_draw(), FB_SIZE, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
+    /* draw_bitmap with a pointer inside fb[s_draw_buf_idx]: IDF just updates
+     * cur_fb_index + fires on_color_trans_done — no copy, no DMA2D. */
+    esp_lcd_panel_draw_bitmap(s_panel, 0, 0, FB_W, FB_H, fb_draw());
+    /* Switch render target to the other buffer */
+    s_draw_buf_idx ^= 1;
 }
 
 /* ------------------------------------------------------------------ */
@@ -555,11 +571,11 @@ static void erase_char(int col, int row)
 static void clear_screen(void)
 {
     rgb888_t bg = s_palette[s_bg & 0xF];
-    memset(s_fb[0], 0, FB_SIZE);
+    memset(fb_draw(), 0, FB_SIZE);
     int scaled_w = s_mode_w * s_scale;
     int scaled_h = s_mode_h * s_scale;
     for (int py = s_off_y; py < s_off_y + scaled_h; py++) {
-        uint8_t *row = s_fb[0] + (py * FB_W + s_off_x) * BYTES_PER_PIX;
+        uint8_t *row = fb_draw() + (py * FB_W + s_off_x) * BYTES_PER_PIX;
         for (int px = 0; px < scaled_w; px++) {
             row[0] = bg.r; row[1] = bg.g; row[2] = bg.b;
             row += BYTES_PER_PIX;
@@ -592,12 +608,12 @@ static void scroll_up(void)
     if (s_vp_left == 0 && s_vp_right == COLS - 1) {
         int move_bytes = (vp_py1 - vp_py0 - char_h_phys) * row_bytes;
         if (move_bytes > 0) {
-            uint8_t *dst = s_fb[0] + vp_py0 * row_bytes;
+            uint8_t *dst = fb_draw() + vp_py0 * row_bytes;
             uint8_t *src = dst + char_bytes;
             memmove(dst, src, move_bytes);
         }
-        uint8_t *bot = s_fb[0] + (vp_py1 - char_h_phys) * row_bytes
-                                + vp_px0 * BYTES_PER_PIX;
+        uint8_t *bot = fb_draw() + (vp_py1 - char_h_phys) * row_bytes
+                                 + vp_px0 * BYTES_PER_PIX;
         for (int pr = 0; pr < char_h_phys; pr++) {
             uint8_t *p = bot + pr * row_bytes;
             for (int pp = 0; pp < (vp_px1 - vp_px0); pp++) {
@@ -607,12 +623,12 @@ static void scroll_up(void)
         }
     } else {
         for (int py = vp_py0; py < vp_py1 - char_h_phys; py++) {
-            uint8_t *dst = s_fb[0] + py * row_bytes + vp_px0 * BYTES_PER_PIX;
+            uint8_t *dst = fb_draw() + py * row_bytes + vp_px0 * BYTES_PER_PIX;
             uint8_t *src = dst + char_bytes;
             memmove(dst, src, vp_pw);
         }
         for (int py = vp_py1 - char_h_phys; py < vp_py1; py++) {
-            uint8_t *p = s_fb[0] + py * row_bytes + vp_px0 * BYTES_PER_PIX;
+            uint8_t *p = fb_draw() + py * row_bytes + vp_px0 * BYTES_PER_PIX;
             for (int pp = 0; pp < (vp_px1 - vp_px0); pp++) {
                 p[0] = bg.r; p[1] = bg.g; p[2] = bg.b;
                 p += BYTES_PER_PIX;
@@ -1687,8 +1703,8 @@ static void vdu_process(uint8_t c)
         case 0xC1: /* VDP_LEGACYMODES (1 byte) */
             s_vdu_skip = 1; s_vdu_state = VDU_STATE_VDU23_0_SKIP;
             break;
-        case 0xC3: /* VDP_SWITCHBUFFER */
-            /* Double buffer switch — no-op for single buffer */
+        case 0xC3: /* VDP_SWITCHBUFFER — flip double buffers */
+            fb_flip_now();
             s_vdu_state = VDU_STATE_NORMAL;
             break;
         case 0xCA: /* VDP_FLUSH_DRAWING_QUEUE */
@@ -1973,7 +1989,7 @@ static void vdu_process(uint8_t c)
         int bx = (int16_t)(s_arg[1] | (s_arg[2] << 8));
         int by = (int16_t)(s_arg[3] | (c        << 8));
         if (xSemaphoreTake(s_fb_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
-            uint8_t *fb = s_fb[0];  /* draw to back buffer */
+            uint8_t *fb = fb_draw();  /* draw to back buffer */
             if (fb) bitmap_draw_to_fb(fb, s_cur_bitmap, bx, by, 1);
             xSemaphoreGive(s_fb_mutex);
         }
