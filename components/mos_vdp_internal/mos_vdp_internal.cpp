@@ -441,7 +441,8 @@ static inline rgb888_t apply_gcol_mode(int mode, rgb888_t dst, rgb888_t src)
 /* Graphics state                                                       */
 /* ------------------------------------------------------------------ */
 static int s_gfx_x = 0, s_gfx_y = 0;   /* last graphics cursor (logical) */
-static int s_gfx_x_prev = 0, s_gfx_y_prev = 0;
+static int s_gfx_x_prev  = 0, s_gfx_y_prev  = 0;  /* penultimate graphics position */
+static int s_gfx_x_prev2 = 0, s_gfx_y_prev2 = 0;  /* pen-penultimate (for triangles) */
 
 /* Graphics viewport in logical pixels (inclusive) — also used by sprite engine */
 /* declared early (before sprite engine) to avoid forward-reference errors */
@@ -986,9 +987,11 @@ static void do_plot(uint8_t cmd, int16_t x_raw, int16_t y_raw)
         abs_y = s_gfx_y + y_px;
     }
 
-    /* Save previous position */
+    /* Shift position history (two deep, needed for filled triangles):
+     * prev2 ← prev ← current position, then set current = abs */
     int prev_x = s_gfx_x, prev_y = s_gfx_y;
-    s_gfx_x_prev = prev_x; s_gfx_y_prev = prev_y;
+    s_gfx_x_prev2 = s_gfx_x_prev; s_gfx_y_prev2 = s_gfx_y_prev;
+    s_gfx_x_prev  = prev_x;       s_gfx_y_prev  = prev_y;
     s_gfx_x = abs_x; s_gfx_y = abs_y;
 
     /* Determine colour from the bottom 2 bits of the command byte.
@@ -1038,9 +1041,9 @@ static void do_plot(uint8_t cmd, int16_t x_raw, int16_t y_raw)
         plot_pixel(abs_x, abs_y, c);
         break;
 
-    case 0x50:  /* Filled triangle (uses prev-prev, prev, current) */
-        plot_filled_triangle(s_gfx_x_prev, s_gfx_y_prev,
-                             prev_x, prev_y,
+    case 0x50:  /* Filled triangle (v0=prev-prev, v1=prev, v2=current) */
+        plot_filled_triangle(s_gfx_x_prev2, s_gfx_y_prev2,
+                             s_gfx_x_prev,  s_gfx_y_prev,
                              abs_x, abs_y, c);
         break;
 
@@ -1072,13 +1075,12 @@ static void do_plot(uint8_t cmd, int16_t x_raw, int16_t y_raw)
         }
         break;
 
-    case 0x70:  /* Filled parallelogram */
-        /* Approximate as two triangles sharing the prev-abs edge */
-        plot_filled_triangle(s_gfx_x_prev, s_gfx_y_prev, prev_x, prev_y, abs_x, abs_y, c);
+    case 0x70:  /* Filled parallelogram (v0=prev-prev, v1=prev, v2=current) */
+        plot_filled_triangle(s_gfx_x_prev2, s_gfx_y_prev2, s_gfx_x_prev, s_gfx_y_prev, abs_x, abs_y, c);
         {
-            int ox = abs_x - prev_x + s_gfx_x_prev;
-            int oy = abs_y - prev_y + s_gfx_y_prev;
-            plot_filled_triangle(s_gfx_x_prev, s_gfx_y_prev, abs_x, abs_y, ox, oy, c);
+            int ox = abs_x - s_gfx_x_prev + s_gfx_x_prev2;
+            int oy = abs_y - s_gfx_y_prev + s_gfx_y_prev2;
+            plot_filled_triangle(s_gfx_x_prev2, s_gfx_y_prev2, abs_x, abs_y, ox, oy, c);
         }
         break;
 
@@ -1460,6 +1462,8 @@ static void mode_set(uint8_t mode)
     s_gvp_x1 = s_mode_w - 1; s_gvp_y1 = s_mode_h - 1;
     s_gfx_origin_x = 0; s_gfx_origin_y = 0;
     s_gfx_x = 0; s_gfx_y = 0;
+    s_gfx_x_prev = 0; s_gfx_y_prev = 0;
+    s_gfx_x_prev2 = 0; s_gfx_y_prev2 = 0;
     udg_reset_all();
     sprites_reset_all();
     bitmaps_reset_all();
@@ -2438,6 +2442,8 @@ esp_err_t mos_vdp_internal_init(esp_lcd_panel_handle_t dpi_panel)
     s_gvp_x1 = s_mode_w - 1; s_gvp_y1 = s_mode_h - 1;
     s_gfx_origin_x = 0; s_gfx_origin_y = 0;
     s_gfx_x = 0; s_gfx_y = 0;
+    s_gfx_x_prev = 0; s_gfx_y_prev = 0;
+    s_gfx_x_prev2 = 0; s_gfx_y_prev2 = 0;
     s_col = 0; s_row = 0;
     s_vdu_state = VDU_STATE_NORMAL;
     s_cursor_visible = true;
