@@ -477,7 +477,7 @@ static inline void fb_plot_pixel_raw(int phys_x, int phys_y, rgb888_t c)
 {
     if ((unsigned)phys_x >= (unsigned)FB_W || (unsigned)phys_y >= (unsigned)FB_H) return;
     uint8_t *p = fb_draw() + (phys_y * FB_W + phys_x) * BYTES_PER_PIX;
-    p[0] = c.r; p[1] = c.g; p[2] = c.b;
+    p[0] = c.b; p[1] = c.g; p[2] = c.r;   /* DPI FB is BGR888 in memory */
 }
 
 static inline rgb888_t fb_read_pixel_raw(int phys_x, int phys_y)
@@ -485,7 +485,7 @@ static inline rgb888_t fb_read_pixel_raw(int phys_x, int phys_y)
     if ((unsigned)phys_x >= (unsigned)FB_W || (unsigned)phys_y >= (unsigned)FB_H)
         return {0,0,0};
     uint8_t *p = fb_draw() + (phys_y * FB_W + phys_x) * BYTES_PER_PIX;
-    return {p[0], p[1], p[2]};
+    return {p[2], p[1], p[0]};   /* DPI FB is BGR888 in memory */
 }
 
 /* Plot a logical pixel with scale, offset, gcol mode, and graphics viewport clip */
@@ -529,9 +529,9 @@ static void fb_fill_hspan(int x0, int x1, int y, rgb888_t c, int gcol_mode)
     if (phys_x0 + phys_w > FB_W) phys_w = FB_W - phys_x0;
 
     /* Pre-build 12-byte pattern: RGBRGBRGBRGB (4 pixels) */
-    uint8_t pat[12] = {
-        c.r, c.g, c.b,  c.r, c.g, c.b,
-        c.r, c.g, c.b,  c.r, c.g, c.b
+        uint8_t pat[12] = {                /* DPI FB is BGR888 in memory */
+        c.b, c.g, c.r,  c.b, c.g, c.r,
+        c.b, c.g, c.r,  c.b, c.g, c.r
     };
     uint32_t w0, w1, w2;
     memcpy(&w0, pat+0, 4);
@@ -547,7 +547,7 @@ static void fb_fill_hspan(int x0, int x1, int y, rgb888_t c, int gcol_mode)
         uint8_t *p   = row;
         uint8_t *end = row + span_bytes;
         /* Align to 4 bytes */
-        while (p < end && ((uintptr_t)p & 3)) { p[0]=c.r; p[1]=c.g; p[2]=c.b; p+=3; }
+        while (p < end && ((uintptr_t)p & 3)) { p[0]=c.b; p[1]=c.g; p[2]=c.r; p+=3; }
         /* 12-byte (3×uint32_t) main loop */
         uint32_t *q = (uint32_t *)p;
         uint8_t  *q8 = (uint8_t *)q;
@@ -557,7 +557,7 @@ static void fb_fill_hspan(int x0, int x1, int y, rgb888_t c, int gcol_mode)
         }
         /* Tail */
         p = q8;
-        while (p + 3 <= end) { p[0]=c.r; p[1]=c.g; p[2]=c.b; p+=3; }
+        while (p + 3 <= end) { p[0]=c.b; p[1]=c.g; p[2]=c.r; p+=3; }
     }
 }
 
@@ -666,7 +666,7 @@ static void clear_screen(void)
     for (int py = s_off_y; py < s_off_y + scaled_h; py++) {
         uint8_t *row = fb_draw() + (py * FB_W + s_off_x) * BYTES_PER_PIX;
         for (int px = 0; px < scaled_w; px++) {
-            row[0] = bg.r; row[1] = bg.g; row[2] = bg.b;
+            row[0] = bg.b; row[1] = bg.g; row[2] = bg.r;   /* BGR888 */
             row += BYTES_PER_PIX;
         }
     }
@@ -706,7 +706,7 @@ static void scroll_up(void)
         for (int pr = 0; pr < char_h_phys; pr++) {
             uint8_t *p = bot + pr * row_bytes;
             for (int pp = 0; pp < (vp_px1 - vp_px0); pp++) {
-                p[0] = bg.r; p[1] = bg.g; p[2] = bg.b;
+                p[0] = bg.b; p[1] = bg.g; p[2] = bg.r;   /* BGR888 */
                 p += BYTES_PER_PIX;
             }
         }
@@ -719,7 +719,7 @@ static void scroll_up(void)
         for (int py = vp_py1 - char_h_phys; py < vp_py1; py++) {
             uint8_t *p = fb_draw() + py * row_bytes + vp_px0 * BYTES_PER_PIX;
             for (int pp = 0; pp < (vp_px1 - vp_px0); pp++) {
-                p[0] = bg.r; p[1] = bg.g; p[2] = bg.b;
+                p[0] = bg.b; p[1] = bg.g; p[2] = bg.r;   /* BGR888 */
                 p += BYTES_PER_PIX;
             }
         }
