@@ -161,22 +161,52 @@ static const uint8_t s_palette_lookup6[64][3] = {
 #undef L
 };
 
+static const uint8_t s_palette02[2] = {
+    0x00, 0x3F,
+};
+static const uint8_t s_palette04[4] = {
+    0x00, 0x30, 0x3C, 0x3F,
+};
+static const uint8_t s_palette08[8] = {
+    0x00, 0x30, 0x0C, 0x3C, 0x03, 0x33, 0x0F, 0x3F,
+};
 static const uint8_t s_palette10[16] = {
     0x00, 0x20, 0x08, 0x28, 0x02, 0x22, 0x0A, 0x2A,   /* dark */
     0x15, 0x30, 0x0C, 0x3C, 0x03, 0x33, 0x0F, 0x3F,   /* bright */
 };
+static const uint8_t s_palette40[64] = {
+    0x00, 0x20, 0x08, 0x28, 0x02, 0x22, 0x0A, 0x2A,   /* first 16 same as s_palette10 */
+    0x15, 0x30, 0x0C, 0x3C, 0x03, 0x33, 0x0F, 0x3F,
+    0x01, 0x04, 0x05, 0x06, 0x07, 0x09, 0x0B, 0x0D,   /* remaining 48 */
+    0x0E, 0x10, 0x11, 0x12, 0x13, 0x14, 0x16, 0x17,
+    0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E, 0x1F,
+    0x21, 0x23, 0x24, 0x25, 0x26, 0x27, 0x29, 0x2B,
+    0x2C, 0x2D, 0x2E, 0x2F, 0x31, 0x32, 0x34, 0x35,
+    0x36, 0x37, 0x38, 0x39, 0x3A, 0x3B, 0x3D, 0x3E,
+};
 
 typedef struct { uint8_t r, g, b; } rgb888_t;
 
-static rgb888_t s_palette[16];
+static rgb888_t s_palette[64];
 
 static void palette_reset(void)
 {
-    for (int i = 0; i < 16; i++) {
-        uint8_t idx = s_palette10[i];
+    const uint8_t *pal;
+    int n = s_mode_colours;
+    if      (n >=  64) { pal = s_palette40; n = 64; }
+    else if (n >=  16) { pal = s_palette10; n = 16; }
+    else if (n >=   8) { pal = s_palette08; n =  8; }
+    else if (n >=   4) { pal = s_palette04; n =  4; }
+    else               { pal = s_palette02; n =  2; }
+    for (int i = 0; i < n; i++) {
+        uint8_t idx = pal[i];
         s_palette[i].r = s_palette_lookup6[idx][0];
         s_palette[i].g = s_palette_lookup6[idx][1];
         s_palette[i].b = s_palette_lookup6[idx][2];
+    }
+    /* Fill remaining slots with black */
+    for (int i = n; i < 64; i++) {
+        s_palette[i] = {0, 0, 0};
     }
 }
 
@@ -576,8 +606,8 @@ static void draw_char(int col, int row, uint8_t c)
     const uint8_t *glyph = get_glyph(c);
     int px = col * FONT_W;
     int py = row * FONT_H;
-    rgb888_t fg = s_palette[s_fg & 0xF];
-    rgb888_t bg = s_palette[s_bg & 0xF];
+    rgb888_t fg = s_palette[s_fg & 0x3F];
+    rgb888_t bg = s_palette[s_bg & 0x3F];
 
     for (int r = 0; r < FONT_H; r++) {
         uint8_t bits = glyph[r];
@@ -600,7 +630,7 @@ static void erase_char(int col, int row)
 {
     int px = col * FONT_W;
     int py = row * FONT_H;
-    rgb888_t bg = s_palette[s_bg & 0xF];
+    rgb888_t bg = s_palette[s_bg & 0x3F];
     for (int r = 0; r < FONT_H; r++) {
         for (int b = 0; b < FONT_W; b++) {
             int lx = px + b, ly = py + r;
@@ -617,7 +647,7 @@ static void erase_char(int col, int row)
 
 static void clear_screen(void)
 {
-    rgb888_t bg = s_palette[s_bg & 0xF];
+    rgb888_t bg = s_palette[s_bg & 0x3F];
     memset(fb_draw(), 0, FB_SIZE);
     int scaled_w = s_mode_w * s_scale;
     int scaled_h = s_mode_h * s_scale;
@@ -633,7 +663,7 @@ static void clear_screen(void)
 static void clear_graphics_viewport(int colour_idx)
 {
     /* Clear the graphics viewport only, in the given colour */
-    rgb888_t c = s_palette[colour_idx & 0xF];
+    rgb888_t c = s_palette[colour_idx & 0x3F];
     for (int y = s_gvp_y0; y <= s_gvp_y1; y++)
         fb_fill_hspan(s_gvp_x0, s_gvp_x1, y, c, 0);
 }
@@ -650,7 +680,7 @@ static void scroll_up(void)
     int vp_px1 = s_off_x + (s_vp_right + 1) * FONT_W * s_scale;
     int vp_pw  = (vp_px1 - vp_px0) * BYTES_PER_PIX;
 
-    rgb888_t bg = s_palette[s_bg & 0xF];
+    rgb888_t bg = s_palette[s_bg & 0x3F];
 
     if (s_vp_left == 0 && s_vp_right == COLS - 1) {
         int move_bytes = (vp_py1 - vp_py0 - char_h_phys) * row_bytes;
@@ -971,9 +1001,9 @@ static void do_plot(uint8_t cmd, int16_t x_raw, int16_t y_raw)
     rgb888_t c;
     int colour_mode = cmd & 0x03;
     if (colour_mode == 3) {
-        c = s_palette[s_gfx_bg & 0xF];  /* background colour */
+        c = s_palette[s_gfx_bg & 0x3F];  /* background colour */
     } else {
-        c = s_palette[s_gfx_fg & 0xF];  /* foreground colour (modes 1 and 2) */
+        c = s_palette[s_gfx_fg & 0x3F];  /* foreground colour (modes 1 and 2) */
     }
 
     uint8_t op = cmd & 0xF8;  /* upper 5 bits, mask low 3 */
@@ -1016,7 +1046,7 @@ static void do_plot(uint8_t cmd, int16_t x_raw, int16_t y_raw)
 
     case 0x58:  /* Fill horizontal line to right until non-bg colour */
         {
-            rgb888_t bg = s_palette[s_gfx_bg & 0xF];
+            rgb888_t bg = s_palette[s_gfx_bg & 0x3F];
             int sy = agon_to_screen_y(abs_y);
             for (int ix = abs_x; ix <= s_gvp_x1; ix++) {
                 rgb888_t cur = fb_read_pixel_raw(s_off_x + ix*s_scale, s_off_y + sy*s_scale);
@@ -1032,7 +1062,7 @@ static void do_plot(uint8_t cmd, int16_t x_raw, int16_t y_raw)
 
     case 0x68:  /* Fill left until fg colour */
         {
-            rgb888_t fg = s_palette[s_gfx_fg & 0xF];
+            rgb888_t fg = s_palette[s_gfx_fg & 0x3F];
             int sy = agon_to_screen_y(abs_y);
             for (int ix = abs_x; ix >= s_gvp_x0; ix--) {
                 rgb888_t cur = fb_read_pixel_raw(s_off_x + ix*s_scale, s_off_y + sy*s_scale);
@@ -1588,9 +1618,9 @@ static void vdu_process(uint8_t c)
         break;
     case VDU_STATE_VDU18_2:
         if (c < 128) {
-            s_gfx_fg = c & 0xF;
+            s_gfx_fg = c & 0x3F;
         } else {
-            s_gfx_bg = (c - 128) & 0xF;
+            s_gfx_bg = (c - 128) & 0x3F;
         }
         s_vdu_state = VDU_STATE_NORMAL;
         break;
