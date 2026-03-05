@@ -1623,9 +1623,9 @@ static void vdu_process(uint8_t c)
     /* ---- VDU 17: COLOUR n ---- */
     case VDU_STATE_VDU17:
         if (c < 128) {
-            s_fg = c & 0xF;
+            s_fg = pal_idx(c);
         } else {
-            s_bg = (c - 128) & 0xF;
+            s_bg = pal_idx(c - 128);
         }
         s_vdu_state = VDU_STATE_NORMAL;
         break;
