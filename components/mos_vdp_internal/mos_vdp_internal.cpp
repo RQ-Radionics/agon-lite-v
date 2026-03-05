@@ -189,6 +189,17 @@ typedef struct { uint8_t r, g, b; } rgb888_t;
 
 static rgb888_t s_palette[64];
 
+/* Map a colour index to a valid palette slot.
+ * Agon hardware wraps colour indices modulo the number of colours in the
+ * current mode — e.g. colour 15 in a 4-colour mode → slot 15%4 = 3 (white).
+ * Using & 0x3F (bitmask) instead gives slot 15 which is black (unfilled). */
+static inline int pal_idx(int c)
+{
+    int n = s_mode_colours;
+    if (n <= 0) n = 2;
+    return ((c % n) + n) % n;   /* handles negative c gracefully */
+}
+
 static void palette_reset(void)
 {
     const uint8_t *pal;
@@ -607,8 +618,8 @@ static void draw_char(int col, int row, uint8_t c)
     const uint8_t *glyph = get_glyph(c);
     int px = col * FONT_W;
     int py = row * FONT_H;
-    rgb888_t fg = s_palette[s_fg & 0x3F];
-    rgb888_t bg = s_palette[s_bg & 0x3F];
+    rgb888_t fg = s_palette[pal_idx(s_fg)];
+    rgb888_t bg = s_palette[pal_idx(s_bg)];
 
     for (int r = 0; r < FONT_H; r++) {
         uint8_t bits = glyph[r];
@@ -631,7 +642,7 @@ static void erase_char(int col, int row)
 {
     int px = col * FONT_W;
     int py = row * FONT_H;
-    rgb888_t bg = s_palette[s_bg & 0x3F];
+    rgb888_t bg = s_palette[pal_idx(s_bg)];
     for (int r = 0; r < FONT_H; r++) {
         for (int b = 0; b < FONT_W; b++) {
             int lx = px + b, ly = py + r;
@@ -648,7 +659,7 @@ static void erase_char(int col, int row)
 
 static void clear_screen(void)
 {
-    rgb888_t bg = s_palette[s_bg & 0x3F];
+    rgb888_t bg = s_palette[pal_idx(s_bg)];
     memset(fb_draw(), 0, FB_SIZE);
     int scaled_w = s_mode_w * s_scale;
     int scaled_h = s_mode_h * s_scale;
@@ -664,7 +675,7 @@ static void clear_screen(void)
 static void clear_graphics_viewport(int colour_idx)
 {
     /* Clear the graphics viewport only, in the given colour */
-    rgb888_t c = s_palette[colour_idx & 0x3F];
+    rgb888_t c = s_palette[pal_idx(colour_idx)];
     for (int y = s_gvp_y0; y <= s_gvp_y1; y++)
         fb_fill_hspan(s_gvp_x0, s_gvp_x1, y, c, 0);
 }
@@ -681,7 +692,7 @@ static void scroll_up(void)
     int vp_px1 = s_off_x + (s_vp_right + 1) * FONT_W * s_scale;
     int vp_pw  = (vp_px1 - vp_px0) * BYTES_PER_PIX;
 
-    rgb888_t bg = s_palette[s_bg & 0x3F];
+    rgb888_t bg = s_palette[pal_idx(s_bg)];
 
     if (s_vp_left == 0 && s_vp_right == COLS - 1) {
         int move_bytes = (vp_py1 - vp_py0 - char_h_phys) * row_bytes;
@@ -1004,9 +1015,9 @@ static void do_plot(uint8_t cmd, int16_t x_raw, int16_t y_raw)
     rgb888_t c;
     int colour_mode = cmd & 0x03;
     if (colour_mode == 3) {
-        c = s_palette[s_gfx_bg & 0x3F];  /* background colour */
+        c = s_palette[pal_idx(s_gfx_bg)];  /* background colour */
     } else {
-        c = s_palette[s_gfx_fg & 0x3F];  /* foreground colour (modes 1 and 2) */
+        c = s_palette[pal_idx(s_gfx_fg)];  /* foreground colour (modes 1 and 2) */
     }
 
     uint8_t op = cmd & 0xF8;  /* upper 5 bits, mask low 3 */
@@ -1049,7 +1060,7 @@ static void do_plot(uint8_t cmd, int16_t x_raw, int16_t y_raw)
 
     case 0x58:  /* Fill horizontal line to right until non-bg colour */
         {
-            rgb888_t bg = s_palette[s_gfx_bg & 0x3F];
+            rgb888_t bg = s_palette[pal_idx(s_gfx_bg)];
             int sy = agon_to_screen_y(abs_y);
             for (int ix = abs_x; ix <= s_gvp_x1; ix++) {
                 rgb888_t cur = fb_read_pixel_raw(s_off_x + ix*s_scale, s_off_y + sy*s_scale);
@@ -1065,7 +1076,7 @@ static void do_plot(uint8_t cmd, int16_t x_raw, int16_t y_raw)
 
     case 0x68:  /* Fill left until fg colour */
         {
-            rgb888_t fg = s_palette[s_gfx_fg & 0x3F];
+            rgb888_t fg = s_palette[pal_idx(s_gfx_fg)];
             int sy = agon_to_screen_y(abs_y);
             for (int ix = abs_x; ix >= s_gvp_x0; ix--) {
                 rgb888_t cur = fb_read_pixel_raw(s_off_x + ix*s_scale, s_off_y + sy*s_scale);
@@ -1638,7 +1649,7 @@ static void vdu_process(uint8_t c)
     case VDU_STATE_VDU19_3: s_arg[2] = c; s_vdu_state = VDU_STATE_VDU19_4; break;
     case VDU_STATE_VDU19_4: s_arg[3] = c; s_vdu_state = VDU_STATE_VDU19_5; break;
     case VDU_STATE_VDU19_5: {
-        int idx = s_arg[0] & 0xF;
+        int idx = pal_idx(s_arg[0]);
         if (s_arg[1] == 16) {
             s_palette[idx].r = s_arg[2];
             s_palette[idx].g = s_arg[3];
