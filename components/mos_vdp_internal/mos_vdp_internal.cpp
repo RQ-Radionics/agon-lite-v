@@ -502,10 +502,12 @@ static void fb_flush_now(void)
 {
     if (!fb_draw()) return;
     s_fb_dirty = false;
-    /* Flush the back buffer (draw target) to physical PSRAM so the DPI DMA
-     * sees the updated pixels.  We use cache_msync C2M (no draw_bitmap) to
-     * avoid racing with the dw_gdma ISR. */
+    /* Sync draw buffer to PSRAM then tell the DPI controller to display it.
+     * draw_bitmap() with a pointer inside fbs[] does only cache_msync +
+     * cur_fb_index update — no DMA copy.  Safe from render task context. */
     esp_cache_msync(fb_draw(), FB_SIZE, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
+    if (s_panel)
+        esp_lcd_panel_draw_bitmap(s_panel, 0, 0, FB_W, FB_H, fb_draw());
 }
 
 /* Flip double buffers: sync back → PSRAM, tell DPI to switch to it,
