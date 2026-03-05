@@ -59,7 +59,12 @@ static inline void dpi_set_cur_fb(esp_lcd_panel_handle_t panel, uint8_t idx)
     /* base has 10 pointer-sized members (9 fn ptrs + user_data), then bus ptr,
      * then virtual_channel (u8), then cur_fb_index (u8). */
     uintptr_t base = (uintptr_t)panel;
-    size_t off = 11 * sizeof(void *) + 1;   /* 10 base-vtable ptrs + bus ptr + virtual_channel */
+    /* Verified from boot dump (IDF 5.x, ESP32-P4):
+     * offset 0..43:  base vtable (10 fn ptrs + user_data) = 11 × 4 bytes
+     * offset 44..47: bus ptr (4 bytes)
+     * offset 48:     virtual_channel (uint8_t)
+     * offset 49:     cur_fb_index    (uint8_t)  ← we write this */
+    size_t off = 11 * sizeof(void *) + sizeof(void *) + 1;  /* = 49 on RV32 */
     volatile uint8_t *p = (volatile uint8_t *)(base + off);
     *p = idx;
 }
@@ -526,10 +531,10 @@ static void fb_flush_now(void)
 {
     if (!fb_draw()) return;
     s_fb_dirty = false;
-    /* Sync draw buffer cache → PSRAM so the DPI DMA reads fresh pixels. */
+    /* Sync draw buffer cache → PSRAM so the DPI DMA reads fresh pixels.
+     * Then set cur_fb_index directly (atomic byte store, offset verified=49). */
     esp_cache_msync(fb_draw(), FB_SIZE, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
-    /* NOTE: dpi_set_cur_fb disabled until offset is verified from boot dump */
-    // if (s_panel) dpi_set_cur_fb(s_panel, (uint8_t)s_draw_buf_idx);
+    if (s_panel) dpi_set_cur_fb(s_panel, (uint8_t)s_draw_buf_idx);
 }
 
 /* Flip double buffers: sync back → PSRAM, point DPI at it, swap indices.
@@ -539,8 +544,7 @@ static void fb_flip_now(void)
     if (!s_panel || !fb_draw()) return;
     s_fb_dirty = false;
     esp_cache_msync(fb_draw(), FB_SIZE, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
-    /* NOTE: dpi_set_cur_fb disabled until offset is verified from boot dump */
-    // dpi_set_cur_fb(s_panel, (uint8_t)s_draw_buf_idx);
+    dpi_set_cur_fb(s_panel, (uint8_t)s_draw_buf_idx);
     s_draw_buf_idx ^= 1;
 }
 
@@ -2371,19 +2375,15 @@ esp_err_t mos_vdp_internal_init(esp_lcd_panel_handle_t dpi_panel)
             s_fb[1] = (uint8_t *)fb1;
             ESP_LOGI(TAG, "Framebuffers: fb0=%p fb1=%p (%u bytes each)",
                      s_fb[0], s_fb[1], (unsigned)FB_SIZE);
-            /* Dump first 64 bytes of the DPI panel struct so we can identify
-             * the layout and find cur_fb_index (should be 0 at startup,
-             * preceded by virtual_channel=0, after bus ptr and base vtable). */
+            /* Verify dpi_set_cur_fb offset (49 on RV32 IDF5.x):
+             * read cur_fb_index — must be 0 at init, num_fbs must be 2. */
             {
                 volatile uint8_t *raw = (volatile uint8_t *)s_panel;
-                ESP_LOGI(TAG, "DPI panel struct @ %p:", s_panel);
-                for (int _i = 0; _i < 64; _i += 16) {
-                    ESP_LOGI(TAG, "  +%02d: %02x %02x %02x %02x  %02x %02x %02x %02x  %02x %02x %02x %02x  %02x %02x %02x %02x",
-                        _i,
-                        raw[_i+ 0], raw[_i+ 1], raw[_i+ 2], raw[_i+ 3],
-                        raw[_i+ 4], raw[_i+ 5], raw[_i+ 6], raw[_i+ 7],
-                        raw[_i+ 8], raw[_i+ 9], raw[_i+10], raw[_i+11],
-                        raw[_i+12], raw[_i+13], raw[_i+14], raw[_i+15]);
+                uint8_t cur = raw[49], num = raw[50];
+                if (cur == 0 && num == 2) {
+                    ESP_LOGI(TAG, "dpi_set_cur_fb offset=49 verified (cur=%d num_fbs=%d)", cur, num);
+                } else {
+                    ESP_LOGE(TAG, "dpi_set_cur_fb offset MISMATCH: raw[49]=%d raw[50]=%d (expected 0,2)", cur, num);
                 }
             }
         }
@@ -2479,7 +2479,10 @@ void mos_vdp_internal_set_response_cb(void (*cb)(uint8_t))
 void mos_vdp_internal_putch(uint8_t c)
 {
     if (!s_vdu_queue) return;
-    xQueueSend(s_vdu_queue, &c, 0);
+    /* Block until space is available — natural backpressure like TCP send().
+     * user_prog slows down to the render rate instead of dropping VDU bytes.
+     * IDLE WDT check is disabled so blocking here is safe. */
+    xQueueSend(s_vdu_queue, &c, portMAX_DELAY);
 }
 
 int mos_vdp_internal_getch(void)
