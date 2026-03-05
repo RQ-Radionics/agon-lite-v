@@ -39,6 +39,30 @@
 #include "esp_lcd_panel_ops.h"
 #include "esp_lcd_mipi_dsi.h"
 #include "esp_cache.h"
+
+/* Switch the DPI panel's active framebuffer by writing cur_fb_index directly.
+ *
+ * Why not draw_bitmap: draw_bitmap fires on_color_trans_done from task context,
+ * which reprograms the DW-GDMA channel while the ISR may be reading it →
+ * Load access fault in dw_gdma_channel_default_isr (MTVAL=0x4, always).
+ *
+ * Layout of esp_lcd_dpi_panel_t (esp_lcd_panel_dpi.c, IDF 5.x):
+ *   offset 0:  base (esp_lcd_panel_t) — 9 fn-ptrs + 1 void* = 10 × sizeof(void*)
+ *   offset 10×ptr: bus (void*)
+ *   offset 11×ptr: virtual_channel (uint8_t)
+ *   offset 11×ptr+1: cur_fb_index  (uint8_t)  ← we write this
+ *
+ * A uint8_t store is atomic on RISC-V — no mutex needed.
+ * The DW-GDMA ISR reads cur_fb_index at frame-start; we write it any time. */
+static inline void dpi_set_cur_fb(esp_lcd_panel_handle_t panel, uint8_t idx)
+{
+    /* base has 10 pointer-sized members (9 fn ptrs + user_data), then bus ptr,
+     * then virtual_channel (u8), then cur_fb_index (u8). */
+    uintptr_t base = (uintptr_t)panel;
+    size_t off = 11 * sizeof(void *) + 1;   /* 10 base-vtable ptrs + bus ptr + virtual_channel */
+    volatile uint8_t *p = (volatile uint8_t *)(base + off);
+    *p = idx;
+}
 #include "esp_heap_caps.h"
 #include "esp_timer.h"
 
@@ -502,27 +526,25 @@ static void fb_flush_now(void)
 {
     if (!fb_draw()) return;
     s_fb_dirty = false;
-    /* Sync draw buffer to PSRAM then tell the DPI controller to display it.
-     * draw_bitmap() with a pointer inside fbs[] does only cache_msync +
-     * cur_fb_index update — no DMA copy.  Safe from render task context. */
+    /* Sync draw buffer cache → PSRAM so the DPI DMA reads fresh pixels.
+     * Then update cur_fb_index directly (atomic byte store) so the DW-GDMA
+     * ISR switches to this buffer on the next frame start.
+     * We do NOT call draw_bitmap: it fires on_color_trans_done which
+     * reprograms the DMA channel, racing with the running ISR → crash. */
     esp_cache_msync(fb_draw(), FB_SIZE, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
     if (s_panel)
-        esp_lcd_panel_draw_bitmap(s_panel, 0, 0, FB_W, FB_H, fb_draw());
+        dpi_set_cur_fb(s_panel, (uint8_t)s_draw_buf_idx);
 }
 
-/* Flip double buffers: sync back → PSRAM, tell DPI to switch to it,
- * then make the old front the new back.
- * Must be called from render task context (NOT from ISR/timer). */
+/* Flip double buffers: sync back → PSRAM, point DPI at it, swap indices.
+ * Must be called from render task context only. */
 static void fb_flip_now(void)
 {
     if (!s_panel || !fb_draw()) return;
     s_fb_dirty = false;
-    /* Sync back buffer to PSRAM */
     esp_cache_msync(fb_draw(), FB_SIZE, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
-    /* draw_bitmap with a pointer inside fb[s_draw_buf_idx]: IDF just updates
-     * cur_fb_index + fires on_color_trans_done — no copy, no DMA2D. */
-    esp_lcd_panel_draw_bitmap(s_panel, 0, 0, FB_W, FB_H, fb_draw());
-    /* Switch render target to the other buffer */
+    dpi_set_cur_fb(s_panel, (uint8_t)s_draw_buf_idx);
+    /* Switch render target to the other buffer for next frame */
     s_draw_buf_idx ^= 1;
 }
 
@@ -2353,6 +2375,15 @@ esp_err_t mos_vdp_internal_init(esp_lcd_panel_handle_t dpi_panel)
             s_fb[1] = (uint8_t *)fb1;
             ESP_LOGI(TAG, "Framebuffers: fb0=%p fb1=%p (%u bytes each)",
                      s_fb[0], s_fb[1], (unsigned)FB_SIZE);
+            /* Verify dpi_set_cur_fb offset — reads cur_fb_index back and checks
+             * that it matches the known initial value (0 after panel_enable). */
+            dpi_set_cur_fb(s_panel, 0);
+            uint8_t readback = *((volatile uint8_t *)((uintptr_t)s_panel + 11*sizeof(void*)+1));
+            if (readback != 0) {
+                ESP_LOGE(TAG, "dpi_set_cur_fb offset WRONG (readback=%d) — struct layout changed!", readback);
+            } else {
+                ESP_LOGI(TAG, "dpi_set_cur_fb offset verified OK");
+            }
         }
     } else {
         ESP_LOGW(TAG, "No DPI panel — HDMI output disabled");
