@@ -447,23 +447,46 @@ static void fb_fill_hspan(int x0, int x1, int y, rgb888_t c, int gcol_mode)
             fb_plot_pixel(x, y, c, gcol_mode);
         return;
     }
-    /* Fast path: write scaled pixels directly */
+    /* Fast path: write scaled pixels directly using 32-bit stores.
+     * RGB888 = 3 bytes/pixel; 4 pixels = 12 bytes = 3 uint32_t — so we build
+     * a 12-byte repeating pattern and blast it with 32-bit writes for speed. */
     int phys_x0 = s_off_x + x0 * s_scale;
     int phys_y0 = s_off_y + y  * s_scale;
     int phys_w  = (x1 - x0 + 1) * s_scale;
     /* Bounds check */
     if ((unsigned)phys_x0 >= (unsigned)FB_W || (unsigned)phys_y0 >= (unsigned)FB_H) return;
     if (phys_x0 + phys_w > FB_W) phys_w = FB_W - phys_x0;
+
+    /* Pre-build 12-byte pattern: RGBRGBRGBRGB (4 pixels) */
+    uint8_t pat[12] = {
+        c.r, c.g, c.b,  c.r, c.g, c.b,
+        c.r, c.g, c.b,  c.r, c.g, c.b
+    };
+    uint32_t w0, w1, w2;
+    memcpy(&w0, pat+0, 4);
+    memcpy(&w1, pat+4, 4);
+    memcpy(&w2, pat+8, 4);
+
+    int span_bytes = phys_w * BYTES_PER_PIX;
+
     for (int dy = 0; dy < s_scale; dy++) {
         int py = phys_y0 + dy;
         if ((unsigned)py >= (unsigned)FB_H) break;
         uint8_t *row = fb_draw() + (py * FB_W + phys_x0) * BYTES_PER_PIX;
-        /* Write 3-byte pixels; use loop (RGB888 — can't memset directly) */
-        uint8_t *p = row;
-        for (int i = 0; i < phys_w; i++) {
-            p[0] = c.r; p[1] = c.g; p[2] = c.b;
-            p += BYTES_PER_PIX;
+        uint8_t *p   = row;
+        uint8_t *end = row + span_bytes;
+        /* Align to 4 bytes */
+        while (p < end && ((uintptr_t)p & 3)) { p[0]=c.r; p[1]=c.g; p[2]=c.b; p+=3; }
+        /* 12-byte (3×uint32_t) main loop */
+        uint32_t *q = (uint32_t *)p;
+        uint8_t  *q8 = (uint8_t *)q;
+        while (q8 + 12 <= end) {
+            q[0] = w0; q[1] = w1; q[2] = w2;
+            q += 3; q8 += 12;
         }
+        /* Tail */
+        p = q8;
+        while (p + 3 <= end) { p[0]=c.r; p[1]=c.g; p[2]=c.b; p+=3; }
     }
 }
 

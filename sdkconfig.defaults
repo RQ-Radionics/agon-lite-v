@@ -35,3 +35,9 @@ CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
 # Log level
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
 CONFIG_LOG_DEFAULT_LEVEL=3
+
+# Task watchdog — do NOT check IDLE tasks.
+# user_prog and vdp_render legitimately saturate CPUs during rendering;
+# the IDLE task starvation WDT fires spuriously and causes DMA crashes.
+CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU0=n
+CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU1=n
