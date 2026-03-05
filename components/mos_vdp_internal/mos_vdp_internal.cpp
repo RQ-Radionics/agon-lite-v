@@ -1464,11 +1464,12 @@ static void mode_set(uint8_t mode)
     s_mode_colours = mode_dims[m].colours;
     scale_update();
     palette_reset();
-    /* Clamp fg to highest valid palette entry (white) for this mode.
-     * Modes with < 16 colours only populate s_palette[0..n-1]; using
-     * index 15 in a 4-colour mode gives black (slot filled with {0,0,0}). */
-    s_fg = s_mode_colours - 1; s_bg = 0;
-    s_gfx_fg = s_mode_colours - 1; s_gfx_bg = 0;
+    /* Default fg=15 (Agon white) in all modes.  pal_idx() wraps it to the
+     * correct white slot for the mode: 15%4=3, 15%8=7, 15%16=15, 15%64=15.
+     * Previously s_mode_colours-1 was used which gave slot 63 = 0x3E (cyan)
+     * in 64-colour modes instead of slot 15 = 0x3F (white). */
+    s_fg = 15; s_bg = 0;
+    s_gfx_fg = 15; s_gfx_bg = 0;
     s_gcol_mode = 0;
     s_vp_left = 0; s_vp_top = 0;
     s_vp_right = COLS - 1; s_vp_bottom = ROWS - 1;
@@ -1556,8 +1557,8 @@ static void vdu_process(uint8_t c)
             break;
         case 0x14: /* VDU 20 — reset colours */
             palette_reset();
-            s_fg = s_mode_colours - 1; s_bg = 0;
-            s_gfx_fg = s_mode_colours - 1; s_gfx_bg = 0;
+            s_fg = 15; s_bg = 0;
+            s_gfx_fg = 15; s_gfx_bg = 0;
             break;
         case 0x15: /* VDU 21 — disable VDU (ignored) */    break;
         case 0x16: /* VDU 22 — MODE n */
