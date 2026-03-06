@@ -3,6 +3,7 @@ idf_component_register(
         "mos_vdp_internal.cpp"
         "vdp_font.c"
         "mos_audio_synth.c"
+        "mos_vdp_ttxt.c"
     INCLUDE_DIRS "include" "."
     REQUIRES
         esp_lcd

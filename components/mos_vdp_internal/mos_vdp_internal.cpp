@@ -74,6 +74,7 @@ static inline void dpi_set_cur_fb(esp_lcd_panel_handle_t panel, uint8_t idx)
 #include "vdp_font.h"
 #include "mos_audio_synth.h"
 #include "mos_sysvars_block.h"
+#include "mos_vdp_ttxt.h"
 
 static const char *TAG = "vdp_int";
 
@@ -91,6 +92,7 @@ static int     s_mode_w      = 640;
 static int     s_mode_h      = 480;
 static uint8_t s_mode_num    = 0;    /* current Agon mode number (0-30, +0x80 for double-buf) */
 static uint8_t s_mode_colours = 16; /* number of colours in current mode */
+static bool    s_ttxt_mode   = false; /* true when mode 7 (teletext) is active */
 #define COLS            (s_mode_w / FONT_W)
 #define ROWS            (s_mode_h / FONT_H)
 
@@ -428,6 +430,18 @@ static void fb_flush_timer_cb(void *arg)
     /* Just set the flag — the render task will do the actual draw_bitmap
      * from its safe task context, avoiding any DMA race conditions. */
     s_fb_dirty = true;
+
+    /* Teletext flash: toggle every ~30 frames (~0.5 s at 60 Hz) */
+    if (s_ttxt_mode) {
+        static int s_flash_ctr = 0;
+        static bool s_flash_phase = false;
+        s_flash_ctr++;
+        if (s_flash_ctr >= 30) {
+            s_flash_ctr = 0;
+            s_flash_phase = !s_flash_phase;
+            ttxt_flash(s_flash_phase);
+        }
+    }
 }
 
 /* ------------------------------------------------------------------ */
@@ -573,6 +587,9 @@ static void fb_flush_now(void)
 {
     if (!fb_draw()) return;
     s_fb_dirty = false;
+    /* Update centisecond timer — BBC BASIC reads TIME from sysvar.time for
+     * RND seed and other timing. Updated here at ~60 Hz. */
+    s_sysvars.time = (uint32_t)(esp_timer_get_time() / 10000ULL);
     /* Sync draw buffer cache → PSRAM so the DPI DMA reads fresh pixels.
      * Then set cur_fb_index directly (atomic byte store, offset verified=49). */
     esp_cache_msync(fb_draw(), FB_SIZE, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
@@ -1152,6 +1169,8 @@ static void sysvars_update(void)
     /* cursor position in character cells */
     s_sysvars.cursorX    = (uint8_t)s_col;
     s_sysvars.cursorY    = (uint8_t)s_row;
+    /* centiseconds since boot — used by BBC BASIC TIME and RND seed */
+    s_sysvars.time       = (uint32_t)(esp_timer_get_time() / 10000ULL);
 }
 
 /* Send cursor position packet (VDP_CURSOR 0x82) */
@@ -1199,11 +1218,13 @@ static void send_general_poll(uint8_t seq)
 /* Send character at cursor position (VDP_SCRCHAR 0x83) */
 static void send_scrchar(uint8_t x, uint8_t y)
 {
-    /* We don't maintain a character buffer, so return 0x20 (space) */
+    uint8_t ch = 0x20;
+    if (s_ttxt_mode) {
+        ch = ttxt_get_char((int)x * ttxt_cell_w(), (int)y * ttxt_cell_h());
+    }
     vdp_send_byte(0x23);
     vdp_send_byte(0x03);
-    vdp_send_byte(0x20);
-    (void)x; (void)y;
+    vdp_send_byte(ch);
 }
 
 /* Send pixel colour at position (VDP_SCRPIXEL 0x84) */
@@ -1458,6 +1479,13 @@ static void mode_set(uint8_t mode)
     /* bit 7 = double-buffer; base mode is bits[6:0] */
     int m = (int)(mode & 0x7F);
     if (m >= (int)(sizeof(mode_dims)/sizeof(mode_dims[0]))) m = 0;
+
+    /* Leave teletext mode if we are switching away from mode 7 */
+    if (s_ttxt_mode) {
+        s_ttxt_mode = false;
+        ttxt_deinit();
+    }
+
     s_mode_w       = mode_dims[m].w;
     s_mode_h       = mode_dims[m].h;
     s_mode_num     = mode;          /* preserve double-buffer bit for 0x86 response */
@@ -1484,6 +1512,18 @@ static void mode_set(uint8_t mode)
     bitmaps_reset_all();
     clear_screen();
     s_col = 0; s_row = 0;
+
+    /* Mode 7: initialise teletext engine */
+    if (m == 7) {
+        int rc = ttxt_init(fb_draw(), FB_W, FB_H);
+        if (rc == 0) {
+            s_ttxt_mode = true;
+            ESP_LOGI(TAG, "mode 7: teletext active");
+        } else {
+            ESP_LOGE(TAG, "mode 7: ttxt_init failed (%d), falling back to normal", rc);
+        }
+    }
+
     fb_flush_now();
     /* Notify MOS of mode change */
     send_mode_information();
@@ -1498,8 +1538,42 @@ static void vdu_process(uint8_t c)
      * ================================================================ */
     case VDU_STATE_NORMAL:
         if (c >= 0x20 && c != 0x7F) {
-            draw_char(s_col, s_row, c);
-            cursor_advance();
+            if (s_ttxt_mode) {
+                ttxt_draw_char(s_col * ttxt_cell_w(), s_row * ttxt_cell_h(), c);
+                /* Advance teletext cursor */
+                s_col++;
+                if (s_col >= TTXT_COLS) {
+                    s_col = 0;
+                    s_row++;
+                    if (s_row >= TTXT_ROWS) {
+                        ttxt_scroll();
+                        s_row = TTXT_ROWS - 1;
+                    }
+                }
+            } else {
+                draw_char(s_col, s_row, c);
+                cursor_advance();
+            }
+            fb_flush_now();
+            return;
+        }
+        /* In teletext mode, control codes 0x01-0x1F are also fed to the ttxt
+         * engine (as teletext attribute codes), EXCEPT for VDU codes that have
+         * meaning at the VDU layer (VDU 12=CLS, VDU 10=LF, VDU 13=CR, VDU 8=BS,
+         * VDU 22=MODE, VDU 23=sys). */
+        if (s_ttxt_mode && c >= 0x01 && c <= 0x1F &&
+            c != 0x08 && c != 0x0A && c != 0x0C && c != 0x0D &&
+            c != 0x16 && c != 0x17 && c != 0x1F) {
+            ttxt_draw_char(s_col * ttxt_cell_w(), s_row * ttxt_cell_h(), c);
+            s_col++;
+            if (s_col >= TTXT_COLS) {
+                s_col = 0;
+                s_row++;
+                if (s_row >= TTXT_ROWS) {
+                    ttxt_scroll();
+                    s_row = TTXT_ROWS - 1;
+                }
+            }
             fb_flush_now();
             return;
         }
@@ -1524,16 +1598,29 @@ static void vdu_process(uint8_t c)
             if (s_col > s_vp_right) s_col = s_vp_right;
             break;
         case 0x0A: /* VDU 10 — LF */
-            newline();
+            if (s_ttxt_mode) {
+                s_row++;
+                if (s_row >= TTXT_ROWS) {
+                    ttxt_scroll();
+                    s_row = TTXT_ROWS - 1;
+                }
+            } else {
+                newline();
+            }
             fb_flush_now();
             break;
         case 0x0B: /* VDU 11 — cursor up */
             if (s_row > s_vp_top) s_row--;
             break;
         case 0x0C: /* VDU 12 — CLS */
-            clear_screen();
-            s_col = s_vp_left;
-            s_row = s_vp_top;
+            if (s_ttxt_mode) {
+                ttxt_cls();
+                s_col = 0; s_row = 0;
+            } else {
+                clear_screen();
+                s_col = s_vp_left;
+                s_row = s_vp_top;
+            }
             fb_flush_now();
             break;
         case 0x0D: /* VDU 13 — CR */
@@ -1572,9 +1659,11 @@ static void vdu_process(uint8_t c)
             s_vdu_state = VDU_STATE_VDU24_1;
             s_arg_idx = 0;
             break;
-        case 0x19: /* VDU 25 — PLOT */
-            s_vdu_state = VDU_STATE_VDU25_1;
-            s_arg_idx = 0;
+        case 0x19: /* VDU 25 — PLOT (ignored in teletext mode) */
+            if (!s_ttxt_mode) {
+                s_vdu_state = VDU_STATE_VDU25_1;
+                s_arg_idx = 0;
+            }
             break;
         case 0x1A: /* VDU 26 — reset text and graphics viewports */
             s_vp_left = 0; s_vp_top = 0;
