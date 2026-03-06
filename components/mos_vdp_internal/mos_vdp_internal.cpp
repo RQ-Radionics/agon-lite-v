@@ -1893,8 +1893,9 @@ static void vdu_process(uint8_t c)
         case 0xC1: /* VDP_LEGACYMODES (1 byte) */
             s_vdu_skip = 1; s_vdu_state = VDU_STATE_VDU23_0_SKIP;
             break;
-        case 0xC3: /* VDP_SWITCHBUFFER — flip double buffers */
-            fb_flip_now();
+        case 0xC3: /* VDP_SWITCHBUFFER — flip double buffers (ignored in teletext mode) */
+            if (!s_ttxt_mode)
+                fb_flip_now();
             s_vdu_state = VDU_STATE_NORMAL;
             break;
         case 0xCA: /* VDP_FLUSH_DRAWING_QUEUE */
