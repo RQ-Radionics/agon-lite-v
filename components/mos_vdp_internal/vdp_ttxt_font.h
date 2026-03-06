@@ -7,8 +7,10 @@
  * Ported to plain C for ESP32-P4 VDP internal, 2026
  *
  * Each glyph is 256 entries × 20 rows of uint16_t.
- * Each row is a 16-pixel-wide bitmap: bit0 = leftmost pixel of low byte,
- * bit0 of high byte = pixel 8. Stored little-endian (low byte first).
+ * Each row is a 16-pixel-wide bitmap stored as two bytes (lo, hi):
+ * lo byte = pixels 8-15 (right half), hi byte = pixels 0-7 (left half).
+ * Within each byte: bit0 = rightmost pixel of that half (MSB = leftmost).
+ * To render: swap bytes → 16-bit word with MSB = leftmost pixel (x=0).
  *
  * Glyphs 0x00-0x1F : control-code placeholder glyphs (not normally displayed)
  * Glyphs 0x20-0x7F : UK teletext character set (ASCII with UK substitutions)

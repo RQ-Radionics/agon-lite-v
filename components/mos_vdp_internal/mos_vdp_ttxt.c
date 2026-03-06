@@ -224,14 +224,14 @@ static void ttxt_render_cell(int col, int row,
     for (int y = 0; y < s_cell_h; y++) {
         uint8_t lo = glyph[y * 2 + 0];
         uint8_t hi = glyph[y * 2 + 1];
-        uint16_t bits = (uint16_t)lo | ((uint16_t)hi << 8);
+        /* Font convention: lo byte holds pixels 8-15, hi byte holds pixels 0-7.
+         * Swap bytes so MSB of the resulting word = leftmost pixel (x=0). */
+        uint16_t bits = ((uint16_t)lo << 8) | (uint16_t)hi;
         int py = py0 + y;
         if (py >= s_fb_h) break;
 
         uint8_t *line = s_fb + (py * s_fb_w + px0) * 3;
         for (int x = 0; x < TTXT_CELL_W; x++) {
-            /* Font convention: bit 15 (MSB of high byte) = leftmost pixel (x=0).
-             * bit 0 (LSB of low byte) = rightmost pixel (x=15). */
             if (bits & (0x8000u >> x)) {
                 line[x * 3 + 0] = fg_r;
                 line[x * 3 + 1] = fg_g;
