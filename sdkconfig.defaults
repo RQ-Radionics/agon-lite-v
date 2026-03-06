@@ -38,7 +38,6 @@ CONFIG_LOG_DEFAULT_LEVEL=3
 
 # lwIP: allow fast socket rebind after disconnect (needed by FTP server)
 CONFIG_LWIP_SO_REUSE=y
-CONFIG_LWIP_SO_REUSE_RXTOALL=y
 
 # Task watchdog — do NOT check IDLE tasks.
 # user_prog and vdp_render legitimately saturate CPUs during rendering;
