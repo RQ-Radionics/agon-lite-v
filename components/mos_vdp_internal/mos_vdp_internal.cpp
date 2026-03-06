@@ -1659,10 +1659,15 @@ static void vdu_process(uint8_t c)
             s_vdu_state = VDU_STATE_VDU24_1;
             s_arg_idx = 0;
             break;
-        case 0x19: /* VDU 25 — PLOT (ignored in teletext mode) */
+        case 0x19: /* VDU 25 — PLOT (silently ignored in teletext mode) */
             if (!s_ttxt_mode) {
                 s_vdu_state = VDU_STATE_VDU25_1;
                 s_arg_idx = 0;
+            } else {
+                /* Consume the 5 argument bytes (cmd + xlo + xhi + ylo + yhi)
+                 * without acting, so the VDU stream stays in sync. */
+                s_vdu_skip = 5;
+                s_vdu_state = VDU_STATE_VDU23_0_SKIP;
             }
             break;
         case 0x1A: /* VDU 26 — reset text and graphics viewports */
