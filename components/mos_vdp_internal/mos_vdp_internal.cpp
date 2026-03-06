@@ -1451,7 +1451,7 @@ static void mode_set(uint8_t mode)
         /* 4 */ {640, 240, 16},
         /* 5 */ {640, 240,  4},
         /* 6 */ {640, 240,  2},
-        /* 7 */ {640, 480, 16},  /* teletext — no native raster, fall back to 640×480 */
+        /* 7 */ {640, 480,  8},  /* teletext — 8 colours (teletext palette), 640×480 canvas */
         /* 8 */ {320, 240, 64},
         /* 9 */ {320, 240, 16},
         /*10 */ {320, 240,  4},
@@ -1862,8 +1862,9 @@ static void vdu_process(uint8_t c)
         case 0x90: /* VDP_UDG — redefine char in display font (skip 9 bytes) */
             s_vdu_skip = 9; s_vdu_state = VDU_STATE_VDU23_0_SKIP;
             break;
-        case 0x91: /* VDP_UDG_RESET — reset all UDGs */
-            udg_reset_all();
+        case 0x91: /* VDP_UDG_RESET — reset all UDGs (ignored in teletext mode) */
+            if (!s_ttxt_mode)
+                udg_reset_all();
             s_vdu_state = VDU_STATE_NORMAL;
             break;
         case 0x92: /* VDP_MAP_CHAR_TO_BITMAP (skip 5 bytes) */
