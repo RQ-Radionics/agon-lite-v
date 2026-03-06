@@ -236,46 +236,49 @@ static void cmd_cdup(ftp_session_t *s)
     ctrl_printf(s, "250 Directory changed to %s\r\n", s->cwd);
 }
 
-static void cmd_pasv(ftp_session_t *s)
+/*
+ * Open a passive data listen socket, store it in s->data_fd, return port.
+ * Returns -1 on failure (error response already sent).
+ */
+static int open_pasv_socket(ftp_session_t *s)
 {
-    /* Close any previous data socket */
     if (s->data_fd >= 0) { close(s->data_fd); s->data_fd = -1; }
 
     int sock = socket(AF_INET, SOCK_STREAM, 0);
-    if (sock < 0) { ctrl_send(s, "425 Cannot open data socket\r\n"); return; }
+    if (sock < 0) { ctrl_send(s, "425 Cannot open data socket\r\n"); return -1; }
 
     int opt = 1;
     setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 
     struct sockaddr_in addr = {
-        .sin_family = AF_INET,
+        .sin_family      = AF_INET,
         .sin_addr.s_addr = INADDR_ANY,
-        .sin_port = 0,   /* let OS pick */
+        .sin_port        = 0,
     };
     if (bind(sock, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-        close(sock);
-        ctrl_send(s, "425 Cannot bind data socket\r\n");
-        return;
+        close(sock); ctrl_send(s, "425 Cannot bind data socket\r\n"); return -1;
     }
     if (listen(sock, 1) < 0) {
-        close(sock);
-        ctrl_send(s, "425 Cannot listen on data socket\r\n");
-        return;
+        close(sock); ctrl_send(s, "425 Cannot listen on data socket\r\n"); return -1;
     }
 
-    /* Get actual port assigned */
     socklen_t alen = sizeof(addr);
     getsockname(sock, (struct sockaddr *)&addr, &alen);
-    int port = ntohs(addr.sin_port);
 
     s->data_fd   = sock;
-    s->pasv_port = port;
+    s->pasv_port = ntohs(addr.sin_port);
+    return s->pasv_port;
+}
 
-    /* Build the IP address in FTP format (a,b,c,d,p1,p2) */
+static void cmd_pasv(ftp_session_t *s)
+{
+    int port = open_pasv_socket(s);
+    if (port < 0) return;
+
     const char *ip = mos_net_ip();
-    if (!ip) ip = "127,0,0,1";
+    if (!ip) ip = "127.0.0.1";
 
-    /* Convert "a.b.c.d" → "a,b,c,d" */
+    /* Convert "a.b.c.d" → "a,b,c,d" for the 227 response */
     char ip_ftp[32];
     snprintf(ip_ftp, sizeof(ip_ftp), "%s", ip);
     for (int i = 0; ip_ftp[i]; i++)
@@ -283,6 +286,15 @@ static void cmd_pasv(ftp_session_t *s)
 
     ctrl_printf(s, "227 Entering Passive Mode (%s,%d,%d)\r\n",
                 ip_ftp, port >> 8, port & 0xFF);
+}
+
+static void cmd_epsv(ftp_session_t *s)
+{
+    /* EPSV — Extended Passive Mode (RFC 2428).
+     * Same socket as PASV; respond with (|||port|) format. */
+    int port = open_pasv_socket(s);
+    if (port < 0) return;
+    ctrl_printf(s, "229 Entering Extended Passive Mode (|||%d|)\r\n", port);
 }
 
 static void cmd_list(ftp_session_t *s, const char *arg)
@@ -557,7 +569,17 @@ static void handle_session(int ctrl_fd)
             else if (strcmp(cmd, "CDUP") == 0 ||
                      strcmp(cmd, "XCUP") == 0) cmd_cdup(&s);
             else if (strcmp(cmd, "PASV") == 0) cmd_pasv(&s);
-            else if (strcmp(cmd, "LIST") == 0) cmd_list(&s, arg);
+            else if (strcmp(cmd, "EPSV") == 0) cmd_epsv(&s);
+            else if (strcmp(cmd, "LIST") == 0) {
+                /* Strip leading flags (-a, -la, etc.) that lftp sends */
+                const char *larg = arg;
+                if (larg && larg[0] == '-') {
+                    while (*larg && *larg != ' ') larg++;
+                    while (*larg == ' ') larg++;
+                    if (*larg == '\0') larg = NULL;
+                }
+                cmd_list(&s, larg);
+            }
             else if (strcmp(cmd, "NLST") == 0) cmd_nlst(&s, arg);
             else if (strcmp(cmd, "SIZE") == 0) cmd_size(&s, arg);
             else if (strcmp(cmd, "RETR") == 0) cmd_retr(&s, arg);
@@ -569,7 +591,14 @@ static void handle_session(int ctrl_fd)
                      strcmp(cmd, "XRMD") == 0) cmd_rmd(&s, arg);
             else if (strcmp(cmd, "RNFR") == 0) cmd_rnfr(&s, arg);
             else if (strcmp(cmd, "RNTO") == 0) cmd_rnto(&s, arg);
-            else if (strcmp(cmd, "FEAT") == 0) ctrl_send(&s, "211-Features:\r\n211 End\r\n");
+            else if (strcmp(cmd, "FEAT") == 0) {
+                ctrl_send(&s, "211-Features:\r\n"
+                              " PASV\r\n"
+                              " EPSV\r\n"
+                              " SIZE\r\n"
+                              " UTF8\r\n"
+                              "211 End\r\n");
+            }
             else if (strcmp(cmd, "OPTS") == 0) ctrl_send(&s, "200 OK\r\n");
             else {
                 ctrl_printf(&s, "502 Command not implemented: %s\r\n", cmd);
