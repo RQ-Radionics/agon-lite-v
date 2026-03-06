@@ -135,6 +135,20 @@ void mos_vdp_internal_set_response_cb(void (*cb)(uint8_t));
  */
 t_mos_sysvars *mos_vdp_internal_get_sysvars(void);
 
+/*
+ * mos_vdp_internal_pause — suspend the 60 Hz render timer.
+ *
+ * Call before any SD-intensive operation (e.g. FTP session) to avoid
+ * PSRAM/SD bus contention. The framebuffer is left intact; rendering
+ * resumes at the next mos_vdp_internal_resume() call.
+ */
+void mos_vdp_internal_pause(void);
+
+/*
+ * mos_vdp_internal_resume — re-enable the 60 Hz render timer.
+ */
+void mos_vdp_internal_resume(void);
+
 #ifdef __cplusplus
 }
 #endif

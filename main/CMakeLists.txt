@@ -22,4 +22,5 @@ idf_component_register(
         mos_audio
         mos_kbd
         mos_vdp_internal
+        mos_ftp
 )

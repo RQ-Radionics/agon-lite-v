@@ -36,6 +36,10 @@ CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
 CONFIG_LOG_DEFAULT_LEVEL=3
 
+# lwIP: allow fast socket rebind after disconnect (needed by FTP server)
+CONFIG_LWIP_SO_REUSE=y
+CONFIG_LWIP_SO_REUSE_RXTOALL=y
+
 # Task watchdog — do NOT check IDLE tasks.
 # user_prog and vdp_render legitimately saturate CPUs during rendering;
 # the IDLE task starvation WDT fires spuriously and causes DMA crashes.

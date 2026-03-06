@@ -2668,3 +2668,20 @@ t_mos_sysvars *mos_vdp_internal_get_sysvars(void)
     sysvars_update();
     return &s_sysvars;
 }
+
+void mos_vdp_internal_pause(void)
+{
+    if (s_flush_timer) {
+        esp_timer_stop(s_flush_timer);
+        ESP_LOGI(TAG, "VDP render paused");
+    }
+}
+
+void mos_vdp_internal_resume(void)
+{
+    if (s_flush_timer) {
+        esp_timer_start_periodic(s_flush_timer, 16667); /* ~60 Hz */
+        fb_flush_now();  /* immediate repaint after resume */
+        ESP_LOGI(TAG, "VDP render resumed");
+    }
+}

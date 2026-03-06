@@ -52,6 +52,7 @@
 #include "mos_vdp_internal.h"
 #include "mos_audio_synth.h"
 #endif
+#include "mos_ftp.h"
 
 static const char *TAG = "esp32-mos";
 
@@ -490,7 +491,16 @@ static void mos_main_task(void *arg)
     }
 #endif
 
-    /* 6. VDP TCP server.
+    /* 6. FTP server — start if network is available */
+#if !defined(CONFIG_MOS_NET_NONE)
+    if (net_ok == 0) {
+        if (mos_ftp_init() == 0) {
+            mos_printf("FTP server on port 21 (root: /sdcard)\r\n");
+        }
+    }
+#endif
+
+    /* 7. VDP TCP server.
      * socket()+bind(INADDR_ANY)+listen() work even without an IP address,
      * so mos_vdp_init() is always called.  With no network, accept() will
      * never return a client and mos_vdp_connected() stays false — correct.
