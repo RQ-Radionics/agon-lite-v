@@ -230,7 +230,9 @@ static void ttxt_render_cell(int col, int row,
 
         uint8_t *line = s_fb + (py * s_fb_w + px0) * 3;
         for (int x = 0; x < TTXT_CELL_W; x++) {
-            if (bits & (1u << x)) {
+            /* Font convention: bit 15 (MSB of high byte) = leftmost pixel (x=0).
+             * bit 0 (LSB of low byte) = rightmost pixel (x=15). */
+            if (bits & (0x8000u >> x)) {
                 line[x * 3 + 0] = fg_r;
                 line[x * 3 + 1] = fg_g;
                 line[x * 3 + 2] = fg_b;
