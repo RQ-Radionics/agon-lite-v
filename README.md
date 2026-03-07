@@ -77,6 +77,8 @@ The board runs an FTP server when a network connection is available. You can tra
 ftp <board-ip-address>
 ```
 
+Username: `mos` / Password: `mos`
+
 ---
 
 ## Wi-Fi and NTP
