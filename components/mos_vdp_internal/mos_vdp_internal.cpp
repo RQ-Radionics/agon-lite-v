@@ -500,10 +500,12 @@ static bool s_cursor_blink_on = true;  /* current blink phase (true = show) */
 static void cursor_xor(void)
 {
     if (!fb_draw()) return;
-    int phys_x = s_off_x + s_col * FONT_W * s_scale;
-    int phys_y = s_off_y + s_row * FONT_H * s_scale;
-    int pw = FONT_W * s_scale;
-    int ph = FONT_H * s_scale;
+    int cw = s_ttxt_mode ? ttxt_cell_w() : FONT_W * s_scale;
+    int ch = s_ttxt_mode ? ttxt_cell_h() : FONT_H * s_scale;
+    int phys_x = s_ttxt_mode ? s_col * cw : s_off_x + s_col * cw;
+    int phys_y = s_ttxt_mode ? s_row * ch : s_off_y + s_row * ch;
+    int pw = cw;
+    int ph = ch;
     int x0 = phys_x < 0 ? 0 : phys_x;
     int y0 = phys_y < 0 ? 0 : phys_y;
     int x1 = phys_x + pw; if (x1 > FB_W) x1 = FB_W;
