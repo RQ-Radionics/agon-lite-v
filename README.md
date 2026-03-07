@@ -41,7 +41,7 @@ The ESP32-P4 replaces the eZ80 as the main CPU. No Z80 emulator, no co-processor
 
 ## Flashing — no development environment required
 
-You can flash pre-built firmware directly from your browser using the **ESP Web Flasher** at [https://espressif.github.io/esptool-js/](https://espressif.github.io/esptool-js/):
+You can flash pre-built firmware directly from your browser using the **online flasher** at [https://rq-radionics.github.io/agonV-online-flasher/](https://rq-radionics.github.io/agonV-online-flasher/):
 
 1. Download the latest release `.bin` files from the [Releases](../../releases) page
 2. Connect the board via USB-C
