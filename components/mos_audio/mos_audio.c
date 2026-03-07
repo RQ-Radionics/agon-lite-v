@@ -158,6 +158,24 @@ static esp_err_t audio_codec_init(i2c_master_bus_handle_t bus)
     ESP_RETURN_ON_ERROR(
         esp_codec_dev_set_out_vol(s_spk_dev, 70), TAG, "set_out_vol");
 
+    /* Silence the ADC path explicitly.
+     *
+     * es8311_start() (called by esp_codec_dev_open) writes ES8311_ADC_REG17=0xBF
+     * and ES8311_ADC_REG15=0x40 unconditionally — regardless of codec_mode.
+     * This activates the ADC analog path with maximum gain.  With AINL/AINR
+     * floating (no microphone on the Olimex board), the ADC amplifies thermal
+     * noise and produces a continuous LFSR-like white noise on the I2S bus,
+     * which the DMA loop plays out of the speakers even at rest.
+     *
+     * Fix: power down the ADC analog section and mute ADC volume.
+     *   REG0E  0xFF  — power down ADC analog (all bits set = powered down)
+     *   REG15  0x00  — disable ADC analog path / DMIC path
+     *   REG17  0x00  — ADC volume = 0 (mute) */
+    esp_codec_dev_write_reg(s_spk_dev, 0x0E, 0xFF);  /* SYSTEM_REG0E: ADC analog off */
+    esp_codec_dev_write_reg(s_spk_dev, 0x15, 0x00);  /* ADC_REG15: analog path off   */
+    esp_codec_dev_write_reg(s_spk_dev, 0x17, 0x00);  /* ADC_REG17: ADC volume mute   */
+    ESP_LOGI(TAG, "ADC analog path powered down (no mic on board)");
+
     ESP_LOGI(TAG, "Audio initialized: %d Hz (stereo codec / mono I2S) 16-bit",
              CONFIG_MOS_AUDIO_SAMPLE_RATE);
     return ESP_OK;
