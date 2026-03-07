@@ -31,6 +31,19 @@ config MOS_VDP_INTERNAL_TASK_STACK_KB
         Stack size for the VDP render task. The task processes VDU commands
         and updates the framebuffer. Increase if you see stack overflow panics.
 
+config MOS_VDP_INTERNAL_FB_WIDTH
+    int "Framebuffer width (pixels) — must match HDMI hact"
+    default 1024
+    help
+        Physical framebuffer width. Must match CONFIG_LT8912B_HACT.
+        The framebuffer is allocated in PSRAM: width * height * 3 bytes.
+
+config MOS_VDP_INTERNAL_FB_HEIGHT
+    int "Framebuffer height (pixels) — must match HDMI vact"
+    default 768
+    help
+        Physical framebuffer height. Must match CONFIG_LT8912B_VACT.
+
 endif # MOS_VDP_INTERNAL_ENABLED
 
 endmenu

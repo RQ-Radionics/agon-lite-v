@@ -17,52 +17,142 @@ menu "LT8912B HDMI Bridge"
         range 0 1
         help
             I2C port used to configure the LT8912B (sub-addresses 0x48/0x49/0x4A).
-            Typically I2C_NUM_1 (port 1) to avoid conflict with the agon-mos
-            user I2C API which uses port 0.
 
     config LT8912B_SDA_GPIO
         int "I2C SDA GPIO"
         default 23
-        help
-            GPIO for I2C SDA to the LT8912B. Olimex ESP32-P4-PC: GPIO23.
 
     config LT8912B_SCL_GPIO
         int "I2C SCL GPIO"
         default 22
-        help
-            GPIO for I2C SCL to the LT8912B. Olimex ESP32-P4-PC: GPIO22.
 
     config LT8912B_HPD_GPIO
         int "HDMI Hot-Plug Detect GPIO (-1 = disabled)"
         default 15
         range -1 56
-        help
-            GPIO connected to HDMI HPD signal. Set to -1 to disable HPD
-            monitoring. Olimex ESP32-P4-PC: GPIO15.
 
     config LT8912B_HDMI_MODE
         bool "HDMI mode (vs DVI)"
         default y
-        help
-            When enabled, the LT8912B outputs HDMI protocol (with audio
-            InfoFrame support). When disabled, outputs DVI-compatible signal.
-            Most modern monitors require HDMI mode.
 
     config LT8912B_DSI_LANES
         int "DSI lane count"
         default 2
         range 1 2
-        help
-            Number of MIPI DSI data lanes connected to the LT8912B.
-            Olimex ESP32-P4-PC uses 2 lanes.
 
     config LT8912B_DSI_LANE_MBPS
         int "DSI lane bit rate (Mbps)"
         default 350
         help
-            MIPI DSI bit rate per lane in Mbps. For 640x480@60Hz with 2 lanes
-            and RGB888: minimum is ceil(25.175 * 24 / 2 / 2) = 151 Mbps.
-            350 Mbps gives comfortable margin for the PHY.
+            MIPI DSI bit rate per lane in Mbps.
+            Must satisfy: lane_mbps >= pclk_mhz * 24 / num_lanes (with margin).
+            1024x768@60Hz/60MHz/2lanes: 60*24/2=720 Mbps → use 896 Mbps.
+
+    # ---------------------------------------------------------------
+    # Video timing — single source of truth for all timing parameters.
+    # The same values are used by:
+    #   - esp_lcd_lt8912b.c  (LT8912B register writes)
+    #   - main.c             (DPI panel config passed to IDF)
+    # ---------------------------------------------------------------
+
+    config LT8912B_HACT
+        int "Horizontal active pixels"
+        default 1024
+        help
+            Horizontal active pixel count (e.g. 1024 for 1024x768).
+
+    config LT8912B_VACT
+        int "Vertical active lines"
+        default 768
+        help
+            Vertical active line count (e.g. 768 for 1024x768).
+
+    config LT8912B_PCLK_MHZ
+        int "Pixel clock (MHz)"
+        default 60
+        help
+            Pixel clock in MHz. Must be an exact divisor of the DPI clock source.
+            DPI clock source = PLL_F240M (240 MHz).
+            Valid exact values: 240/4=60, 240/5=48, 240/6=40, 240/8=30 MHz.
+            Use 60 MHz for 1024x768@60Hz.
+
+    config LT8912B_HS
+        int "Horizontal sync width (pixels)"
+        default 8
+        help
+            Horizontal sync pulse width in pixels.
+
+    config LT8912B_HFP
+        int "Horizontal front porch (pixels)"
+        default 48
+        help
+            Horizontal front porch in pixels.
+
+    config LT8912B_HBP
+        int "Horizontal back porch (pixels)"
+        default 140
+        help
+            Horizontal back porch in pixels.
+            htotal = hact + hs + hfp + hbp.
+            1024x768@60Hz/60MHz: htotal=1220, hblank=196 (hs=8 hfp=48 hbp=140).
+
+    config LT8912B_VS
+        int "Vertical sync width (lines)"
+        default 6
+        help
+            Vertical sync pulse width in lines.
+
+    config LT8912B_VFP
+        int "Vertical front porch (lines)"
+        default 3
+        help
+            Vertical front porch in lines.
+
+    config LT8912B_VBP
+        int "Vertical back porch (lines)"
+        default 42
+        help
+            Vertical back porch in lines.
+            vtotal = vact + vs + vfp + vbp.
+            1024x768@60Hz/60MHz: vtotal=819, vblank=51 (vs=6 vfp=3 vbp=42).
+
+    config LT8912B_HSYNC_POL
+        int "Horizontal sync polarity (1=positive, 0=negative)"
+        default 1
+        range 0 1
+
+    config LT8912B_VSYNC_POL
+        int "Vertical sync polarity (1=positive, 0=negative)"
+        default 0
+        range 0 1
+
+    config LT8912B_SETTLE
+        hex "MIPI DSI settle register (0x49:0x11)"
+        default 0x10
+        help
+            MIPI DSI settle time register value.
+            0x04 for vactive <= 600, 0x10 for vactive >= 768.
+
+    config LT8912B_DDS_0
+        hex "DDS frequency word byte 0 (LSB, reg 0x4E)"
+        default 0x28
+        help
+            strm_sw_freq_word[7:0] = (pclk_mhz * 0x16C16) & 0xFF.
+            60 MHz: 60 * 0x16C16 = 0x555528 → byte0=0x28.
+
+    config LT8912B_DDS_1
+        hex "DDS frequency word byte 1 (reg 0x4F)"
+        default 0x55
+        help
+            strm_sw_freq_word[15:8] = (pclk_mhz * 0x16C16 >> 8) & 0xFF.
+            60 MHz: 0x555528 → byte1=0x55.
+
+    config LT8912B_DDS_2
+        hex "DDS frequency word byte 2 (MSB, reg 0x50)"
+        default 0x55
+        help
+            strm_sw_freq_word[23:16] = (pclk_mhz * 0x16C16 >> 16) & 0xFF.
+            60 MHz: 0x555528 → byte2=0x55.
 
     endif # LT8912B_ENABLED
 

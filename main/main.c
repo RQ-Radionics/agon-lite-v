@@ -172,28 +172,27 @@ static esp_lcd_panel_handle_t hdmi_init(void)
     ESP_LOGI(TAG, "HDMI: step 3 OK");
 
     /* 4. Create DPI panel — feeds pixel data from ESP32-P4 to LT8912B DSI input.
-     * 1024x768 @ 56 MHz pixel clock, RGB888 (24-bit).
-     *    Olimex BSP reduced-blanking 1024x768@60Hz timings:
-     *      htotal=1184 (hfp=48 hs=32 hbp=80), vtotal=790 (vfp=3 vs=4 vbp=15)
-     *      h_polarity=positive, v_polarity=negative
-     *    num_fbs=2: double-buffered so mos_vdp_internal can render to back buffer
-     *               while the DMA controller reads the front buffer.
-     *    disable_lp=1: stay in HS mode during blanking (required for video mode). */
+     * All timing values come from Kconfig (same CONFIG_LT8912B_* used by the driver).
+     * DPI clock source = PLL_F240M (240 MHz); pclk must be an exact divisor.
+     *   60 MHz = 240/4 exact ✓  (for 1024x768@60Hz).
+     * num_fbs=2: double-buffered so mos_vdp_internal renders to back buffer
+     *            while DPI DMA reads the front buffer.
+     * disable_lp=1: stay in HS mode during blanking (required for video mode). */
     esp_lcd_panel_handle_t panel = NULL;
     esp_lcd_dpi_panel_config_t dpi_cfg = {
-        .dpi_clk_src         = MIPI_DSI_DPI_CLK_SRC_DEFAULT,
-        .dpi_clock_freq_mhz  = 56,          /* 56 MHz for 1024x768@60Hz */
+        .dpi_clk_src         = MIPI_DSI_DPI_CLK_SRC_DEFAULT,   /* PLL_F240M */
+        .dpi_clock_freq_mhz  = CONFIG_LT8912B_PCLK_MHZ,
         .pixel_format        = LCD_COLOR_PIXEL_FORMAT_RGB888,
-        .num_fbs             = 2,           /* double-buffered for tear-free rendering */
+        .num_fbs             = 2,
         .video_timing = {
-            .h_size          = 1024,
-            .v_size          = 768,
-            .hsync_pulse_width = 32,
-            .hsync_back_porch  = 80,
-            .hsync_front_porch = 48,
-            .vsync_pulse_width = 4,
-            .vsync_back_porch  = 15,
-            .vsync_front_porch = 3,
+            .h_size            = CONFIG_LT8912B_HACT,
+            .v_size            = CONFIG_LT8912B_VACT,
+            .hsync_pulse_width = CONFIG_LT8912B_HS,
+            .hsync_back_porch  = CONFIG_LT8912B_HBP,
+            .hsync_front_porch = CONFIG_LT8912B_HFP,
+            .vsync_pulse_width = CONFIG_LT8912B_VS,
+            .vsync_back_porch  = CONFIG_LT8912B_VBP,
+            .vsync_front_porch = CONFIG_LT8912B_VFP,
         },
         .flags.disable_lp    = 1,
     };
