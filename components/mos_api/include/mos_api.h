@@ -141,7 +141,7 @@ int  mos_api_setrtc(int year, int month, int day,
 /** Return MOS version string (e.g. "3.0.1"). */
 const char *mos_api_version(void);
 
-/** Return MOS variant string (e.g. "ESP32-S3"). */
+/** Return MOS variant string (e.g. "ESP32-P4"). */
 const char *mos_api_variant(void);
 
 /**

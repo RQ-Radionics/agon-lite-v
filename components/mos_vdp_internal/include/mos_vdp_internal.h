@@ -46,14 +46,20 @@
 #pragma once
 
 #include "esp_err.h"
-#include "esp_lcd_panel_ops.h"
-#include "mos_sysvars_block.h"
+#include "sdkconfig.h"
 #include <stdint.h>
 #include <stdbool.h>
+
+#ifdef CONFIG_MOS_VDP_INTERNAL_ENABLED
+#include "esp_lcd_panel_ops.h"
+#include "mos_sysvars_block.h"
+#endif
 
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+#ifdef CONFIG_MOS_VDP_INTERNAL_ENABLED
 
 /*
  * mos_vdp_internal_init — start the internal VDP.
@@ -148,6 +154,22 @@ void mos_vdp_internal_pause(void);
  * mos_vdp_internal_resume — re-enable the 60 Hz render timer.
  */
 void mos_vdp_internal_resume(void);
+
+#else /* !CONFIG_MOS_VDP_INTERNAL_ENABLED — stub no-ops */
+
+static inline esp_err_t mos_vdp_internal_init(void *dpi_panel) { (void)dpi_panel; return ESP_OK; }
+static inline void mos_vdp_internal_putch(uint8_t c) { (void)c; }
+static inline int  mos_vdp_internal_getch(void) { return -1; }
+static inline bool mos_vdp_internal_kbhit(void) { return false; }
+static inline void mos_vdp_internal_send_scancode(uint8_t b) { (void)b; }
+static inline bool mos_vdp_internal_connected(void) { return false; }
+static inline void mos_vdp_internal_flush(void) {}
+static inline void mos_vdp_internal_set_response_cb(void (*cb)(uint8_t)) { (void)cb; }
+static inline void *mos_vdp_internal_get_sysvars(void) { return NULL; }
+static inline void mos_vdp_internal_pause(void) {}
+static inline void mos_vdp_internal_resume(void) {}
+
+#endif /* CONFIG_MOS_VDP_INTERNAL_ENABLED */
 
 #ifdef __cplusplus
 }

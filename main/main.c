@@ -352,14 +352,15 @@ static void mos_main_task(void *arg)
      *     exercises it with LT8912B transactions, leaving the bus in a known
      *     good state. The production test does the same — I2C is initialised
      *     inside pt_display_init() long before audio_loopback_test runs. */
-#ifdef CONFIG_LT8912B_ENABLED
+#if defined(CONFIG_LT8912B_ENABLED) || defined(CONFIG_MOS_VDP_INTERNAL_ENABLED)
+#  ifdef CONFIG_LT8912B_ENABLED
     esp_lcd_panel_handle_t dpi_panel = hdmi_init();
-#else
+#  else
     esp_lcd_panel_handle_t dpi_panel = NULL;
-#endif
+#  endif
 
     /* 1b2. Internal VDP — framebuffer renderer over HDMI (Olimex only). */
-#ifdef CONFIG_MOS_VDP_INTERNAL_ENABLED
+#  ifdef CONFIG_MOS_VDP_INTERNAL_ENABLED
     {
         esp_err_t vdp_ret = mos_vdp_internal_init(dpi_panel);
         if (vdp_ret != ESP_OK) {
@@ -369,7 +370,8 @@ static void mos_main_task(void *arg)
             ESP_LOGI(TAG, "Internal VDP init OK");
         }
     }
-#endif
+#  endif /* CONFIG_MOS_VDP_INTERNAL_ENABLED */
+#endif /* CONFIG_LT8912B_ENABLED || CONFIG_MOS_VDP_INTERNAL_ENABLED */
 
     /* 1c. Audio codec (ES8311) — after HDMI so the shared I2C bus is already
      *     exercised by LT8912B transactions (matches production test order). */

@@ -4,7 +4,7 @@
  * Loads a flat binary from the FAT filesystem into PSRAM and executes it.
  *
  * Binary format (flat, position-dependent):
- *   - Compiled with xtensa-esp32s3-elf-gcc, -nostdlib, no startup files
+ *   - Compiled with riscv32-esp-elf-gcc, -nostdlib, no startup files
  *   - Linked with MOS_EXEC_BASE as the text start address
  *   - Entry point symbol: _start
  *   - Entry point prototype:
@@ -24,10 +24,8 @@
 
 #include <stdint.h>
 
-/* Load address in PSRAM where user programs are placed.
- * Must be within the mapped PSRAM window on ESP32-S3.
- * Adjust if your board has PSRAM at a different base. */
-#define MOS_EXEC_BASE   0x3C000000UL
+/* Load address in PSRAM where user programs are placed (ESP32-P4). */
+#define MOS_EXEC_BASE   0x48000000UL
 
 /**
  * Load and run a flat binary from the filesystem.

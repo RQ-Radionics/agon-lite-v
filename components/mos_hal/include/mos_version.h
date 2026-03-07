@@ -10,7 +10,7 @@
 #define VERSION_MINOR       0
 #define VERSION_PATCH       1
 
-#define VERSION_VARIANT     "ESP32-S3"
+#define VERSION_VARIANT     "ESP32-P4"
 #define VERSION_SUBTITLE    "Arthur"
 
 /* Stringified version: "3.0.1" */

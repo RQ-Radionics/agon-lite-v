@@ -9,9 +9,7 @@
  *
  * Uses UART_NUM_1 (secondary port).  UART0 is reserved for the debug console.
  *
- * Default GPIO pins:
- *   ESP32-P4 (Waveshare ESP32-P4-WIFI6): TX = GPIO 38, RX = GPIO 37
- *   ESP32-S3:                             TX = GPIO 17, RX = GPIO 18
+ * Default GPIO pins (ESP32-P4, Waveshare ESP32-P4-WIFI6): TX = GPIO 15, RX = GPIO 16
  *
  * Override before calling mos_uopen() via mos_uart_set_pins().
  */
@@ -26,21 +24,13 @@
 
 /* ── Default GPIO pins ─────────────────────────────────────────────────── */
 #ifndef MOS_UART_TX_GPIO
-#  if CONFIG_IDF_TARGET_ESP32P4
     /* GPIO15/16: free header pins on Waveshare ESP32-P4-WIFI6.
      * Avoided: GPIO7-8 (I2C), GPIO9-13 (I2S/codec), GPIO39-44 (SDIO/WiFi),
      *          GPIO53 (PA_ctrl), GPIO54 (SDIO reset), GPIO37-38 (used internally). */
-#    define MOS_UART_TX_GPIO  15
-#  else
-#    define MOS_UART_TX_GPIO  17   /* ESP32-S3 DevKit */
-#  endif
+#  define MOS_UART_TX_GPIO  15
 #endif
 #ifndef MOS_UART_RX_GPIO
-#  if CONFIG_IDF_TARGET_ESP32P4
-#    define MOS_UART_RX_GPIO  16
-#  else
-#    define MOS_UART_RX_GPIO  18   /* ESP32-S3 DevKit */
-#  endif
+#  define MOS_UART_RX_GPIO  16
 #endif
 
 /**

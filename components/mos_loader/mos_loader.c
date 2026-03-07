@@ -4,13 +4,13 @@
  * Loads a flat binary from FAT into a fixed PSRAM exec arena and
  * calls its entry point: int _start(int argc, char **argv, t_mos_api *mos)
  *
- * Supports ESP32-S3 (Xtensa LX7) and ESP32-P4 (RISC-V RV32IMAFC).
+ * Target: ESP32-P4 (RISC-V RV32IMAFC).
  * The binary MUST be compiled with MOS_EXEC_BASE == address of s_exec_arena
  * (read from esp32-mos.map after first build).
  *
  * Constraints:
- *   - PSRAM exec arena aligned to 64 bytes (P4 cache line; safe for S3 too)
- *   - M2C icache invalidation range must be cache-line aligned (64B P4, 32B S3)
+ *   - PSRAM exec arena aligned to 64 bytes (P4 cache line)
+ *   - M2C icache invalidation range must be cache-line aligned (64B)
  *   - Only one user program can run at a time (single arena)
  */
 
@@ -40,34 +40,21 @@ static const char *TAG = "mos_loader";
 /* Fixed PSRAM exec arena — 512 KB.
  * EXT_RAM_BSS_ATTR places it in .ext_ram.bss → PSRAM.
  *
- * ESP32-S3: data window 0x3Cxxxxxx, instruction window 0x42xxxxxx (separate).
- *           Cache line = 32 bytes.
  * ESP32-P4: unified address space at 0x48xxxxxx (DBUS == IBUS).
  *           Cache line = 64 bytes — must align arena AND sync sizes to 64B.
  *
  * MOS_EXEC_BASE in sdk/Makefile MUST equal the exec alias of s_exec_arena.
  * (check build/esp32-mos.map after first build for s_exec_arena address) */
-#define MOS_EXEC_SIZE   (512 * 1024)
-
-#if CONFIG_IDF_TARGET_ESP32P4
-#  define MOS_CACHE_LINE  64u
-#else
-#  define MOS_CACHE_LINE  32u
-#endif
+#define MOS_EXEC_SIZE    (512 * 1024)
+#define MOS_CACHE_LINE   64u
 
 static EXT_RAM_BSS_ATTR __attribute__((aligned(64))) uint8_t s_exec_arena[MOS_EXEC_SIZE];
 
 /* Convert a PSRAM data-bus vaddr to its instruction-bus alias.
- * ESP32-S3: DBUS 0x3C000000 → IBUS 0x42000000 (separate windows).
- * ESP32-P4: unified address space — no conversion needed. */
+ * ESP32-P4: unified address space (DBUS == IBUS) — no conversion needed. */
 static inline void *dbus_to_ibus(const void *dbus_ptr)
 {
-#if CONFIG_IDF_TARGET_ESP32P4
     return (void *)dbus_ptr;
-#else
-    uint32_t offset = (uint32_t)dbus_ptr - SOC_MMU_DBUS_VADDR_BASE;
-    return (void *)(SOC_MMU_IBUS_VADDR_BASE + offset);
-#endif
 }
 
 /* Entry point prototype for user programs */
@@ -75,26 +62,14 @@ typedef int (*mos_entry_t)(int argc, char **argv, t_mos_api *mos);
 
 /* Stack size for user program task.
  *
- * ESP32-S3: stack MUST be in internal DRAM — flash driver disables the shared
- * SPI bus (flash+PSRAM share one controller on S3), making PSRAM-backed stacks
- * inaccessible during flash reads → assert in esp_task_stack_is_sane_cache_disabled.
- *
  * ESP32-P4: flash and PSRAM use INDEPENDENT SPI controllers
- * (CONFIG_SOC_MEMSPI_FLASH_PSRAM_INDEPENDENT=y), so disabling the flash cache
- * does NOT affect PSRAM access. PSRAM stacks are safe on P4.
+ * (CONFIG_SOC_MEMSPI_FLASH_PSRAM_INDEPENDENT=y), so PSRAM stacks are safe.
  * Internal DRAM is only ~108KB free after IDF init — 128KB does not fit.
- * Use PSRAM (SPIRAM) for the task stack on P4; keep DRAM on S3.
  *
  * BBC BASIC bbeval/bbexec recurse deeply; 128KB is sufficient. */
 #define USER_TASK_STACK_KB   128
 #define USER_TASK_STACK_SIZE (USER_TASK_STACK_KB * 1024)
-
-#if CONFIG_IDF_TARGET_ESP32P4
-#  define USER_TASK_STACK_CAPS  (MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)
-#else
-/* ESP32-S3 and others: must use internal DRAM */
-#  define USER_TASK_STACK_CAPS  (MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)
-#endif
+#define USER_TASK_STACK_CAPS (MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)
 
 typedef struct {
     mos_entry_t     entry;
@@ -184,28 +159,15 @@ int mos_loader_exec(const char *path, int argc, char **argv)
         return -1;
     }
 
-    /* 3b. Validate magic: byte[0] must be the ISA's jump opcode.
-     *     ESP32-S3 (Xtensa): 0x06 (density 'j' opcode)
-     *     ESP32-P4 (RISC-V): 0x6F (JAL opcode) */
-#if CONFIG_IDF_TARGET_ESP32P4
+    /* 3b. Validate magic: first byte must be RISC-V JAL opcode 0x6F */
     if (s_exec_arena[0] != 0x6F) {
         ESP_LOGE(TAG, "'%s': not a valid ESP32-MOS binary (got %02x %02x %02x, "
                  "expected RISC-V JAL opcode 0x6F). "
-                 "This may be an Xtensa or eZ80 binary — it cannot run on RISC-V.",
+                 "This may be an eZ80/Agon binary — it cannot run on RISC-V.",
                  resolved,
                  s_exec_arena[0], s_exec_arena[1], s_exec_arena[2]);
         return -1;
     }
-#else
-    if (s_exec_arena[0] != 0x06) {
-        ESP_LOGE(TAG, "'%s': not a valid ESP32-MOS binary (got %02x %02x %02x, "
-                 "expected Xtensa 'j' opcode 0x06). "
-                 "This may be an eZ80/Agon binary — it cannot run on Xtensa.",
-                 resolved,
-                 s_exec_arena[0], s_exec_arena[1], s_exec_arena[2]);
-        return -1;
-    }
-#endif
 
     /* 4. Sync caches so the CPU sees the freshly-loaded binary.
      *
@@ -217,9 +179,9 @@ int mos_loader_exec(const char *path, int argc, char **argv)
      *
      * Step B: M2C invalidate icache — drop stale icache lines so the CPU
      *         fetches fresh code from PSRAM.
-     *         ESP32-S3: IBUS = DBUS + 0x6000000. ESP32-P4: same address.
+     *         ESP32-P4: IBUS == DBUS (unified address space).
      *         CRITICAL: M2C does NOT accept UNALIGNED — base and size MUST
-     *         be aligned to MOS_CACHE_LINE (64B on P4, 32B on S3). */
+     *         be aligned to MOS_CACHE_LINE (64B). */
 
     /* Step A: C2M — UNALIGNED allowed */
     esp_err_t err = esp_cache_msync(s_exec_arena, size,
@@ -267,9 +229,7 @@ int mos_loader_exec(const char *path, int argc, char **argv)
         return -1;
     }
 
-    /* Stack allocation: see USER_TASK_STACK_CAPS above for rationale.
-     * On ESP32-P4 this is PSRAM (independent bus from flash, safe).
-     * On ESP32-S3 this is internal DRAM (shared bus, must avoid PSRAM).
+    /* Stack allocation: PSRAM (independent bus from flash, safe on P4).
      *
      * xTaskCreateWithCaps allocates TCB + stack internally using the given
      * heap caps, and FreeRTOS owns their lifetime.  We call vTaskDeleteWithCaps

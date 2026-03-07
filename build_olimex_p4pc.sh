@@ -9,22 +9,15 @@ set -e
 cd "$(dirname "$0")"
 
 echo "=== Olimex ESP32-P4-PC build ==="
-# CRITICAL: wipe any cached sdkconfig from a previous build.
-# IDF merges sdkconfig.defaults into an existing sdkconfig, so stale entries
-# survive if not deleted.
-#
-# NOTE: idf.py set-target regenerates sdkconfig from Kconfig defaults BEFORE
-# applying SDKCONFIG_DEFAULTS — so keys like ESP_MAIN_TASK_STACK_SIZE get the
-# Kconfig default (65536) rather than our override (8192).  We therefore wipe
-# sdkconfig a SECOND TIME after set-target so that idf.py build starts clean
-# and applies SDKCONFIG_DEFAULTS from scratch.
+# Wipe cached sdkconfig and build/ to ensure a clean start.
+# SDKCONFIG_DEFAULTS overrides win because idf.py applies them after the
+# Kconfig defaults during the configure phase of `build`.
 rm -f sdkconfig
 rm -rf build
 
 export SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.olimex-p4pc"
-idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.olimex-p4pc" set-target esp32p4
-# Wipe again: set-target wrote Kconfig defaults; we want our overrides to win.
-rm -f sdkconfig
+idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.olimex-p4pc" \
+    set-target esp32p4
 idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.olimex-p4pc" build
 
 echo ""

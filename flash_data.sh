@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # flash_data.sh — Build a FAT image from data/ and flash it to the storage partition
-# Usage: ./flash_data.sh [PORT] [CHIP]
-#   PORT defaults to /dev/cu.usbserial-0001 or set via $ESPPORT
-#   CHIP defaults to esp32s3 (also accepts esp32p4)
+# Usage: ./flash_data.sh [PORT] [BOARD]
+#   PORT  defaults to /dev/cu.usbserial-0001 or set via $ESPPORT
+#   BOARD defaults to esp32p4 (also accepts olimex-p4pc)
 #
 # The FAT image is built from:
 #   data/common/       — shared files (.bas, .bat, .rgb, etc.)
-#   data/<CHIP>/       — target-specific binaries (.bin)
+#   data/<BOARD>/      — target-specific binaries (.bin)
 #
 # Requires ESP-IDF environment active: source /Users/rampa/esp/esp-idf/export.sh
 
@@ -15,13 +15,12 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 PORT="${1:-${ESPPORT:-/dev/cu.usbserial-0001}}"
-BOARD="${2:-esp32s3}"
+BOARD="${2:-esp32p4}"
 
 # Map board names to esptool chip identifiers
 case "${BOARD}" in
-    olimex-p4pc)        CHIP="esp32p4" ;;
-    esp32p4|esp32s3)    CHIP="${BOARD}" ;;
-    *)                  CHIP="${BOARD}" ;;
+    olimex-p4pc)    CHIP="esp32p4" ;;
+    *)              CHIP="${BOARD}" ;;
 esac
 
 DATA_COMMON="${SCRIPT_DIR}/data/common"
