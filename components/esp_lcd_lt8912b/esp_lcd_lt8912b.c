@@ -170,7 +170,9 @@ static esp_err_t lt8912b_write_video_timing(void)
 
 #define HTOTAL (CONFIG_LT8912B_HACT + CONFIG_LT8912B_HS + CONFIG_LT8912B_HFP + CONFIG_LT8912B_HBP)
 #define VTOTAL (CONFIG_LT8912B_VACT + CONFIG_LT8912B_VS + CONFIG_LT8912B_VFP + CONFIG_LT8912B_VBP)
-#define SYNC_POL ((CONFIG_LT8912B_HSYNC_POL & 1) | ((CONFIG_LT8912B_VSYNC_POL & 1) << 1))
+/* reg 0xAB: bit0 = vsync polarity, bit1 = hsync polarity (upstream kernel order)
+ * 1 = active-high (positive), 0 = active-low (negative) */
+#define SYNC_POL ((CONFIG_LT8912B_VSYNC_POL & 1) | ((CONFIG_LT8912B_HSYNC_POL & 1) << 1))
 
     ESP_LOGI(TAG, "Video timing: %dx%d htotal=%d vtotal=%d pclk=%dMHz pol=0x%02X",
              CONFIG_LT8912B_HACT, CONFIG_LT8912B_VACT, HTOTAL, VTOTAL,
@@ -225,9 +227,9 @@ static esp_err_t lt8912b_write_video_timing(void)
  *
  * Values from upstream Linux kernel lt8912_write_dds_config().
  * The DDS table (0x1F-0x2E, 0x42-0x5C) is board-agnostic; the HDMI
- * TMDS clock is derived from the DSI input clock, not the crystal.
- * The strm_sw_freq_word (0x4E-0x50) = pclk_mhz * 0x16C16 (Espressif formula).
- *   1024x768@56MHz: 56 * 0x16C16 = 0x4FA4D0 → [7:0]=0xD0, [15:8]=0xA4, [23:16]=0x4F
+ * TMDS clock is derived from the DSI input clock, not from the DDS word.
+ * The strm_sw_freq_word (0x4E-0x50) uses the kernel default (0xFF/0x56/0x69)
+ * for all resolutions — the chip's PLL locks to the live DSI bit clock.
  */
 static esp_err_t lt8912b_write_dds_config(void)
 {

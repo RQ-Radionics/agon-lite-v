@@ -214,11 +214,7 @@ static esp_lcd_panel_handle_t hdmi_init(void)
     {
         void *fb0 = NULL, *fb1 = NULL;
         if (esp_lcd_dpi_panel_get_frame_buffer(panel, 2, &fb0, &fb1) == ESP_OK) {
-            size_t fb_size = 800 * 600 * 3;   /* RGB888 */
-            /* Paint fb0 red (R=0xFF G=0x00 B=0x00) as a DMA sanity check.
-             * If the screen shows red before the shell paints anything,
-             * the DPI→LT8912B→HDMI pipeline is working correctly.
-             * Remove this once display output is confirmed. */
+            size_t fb_size = CONFIG_LT8912B_HACT * CONFIG_LT8912B_VACT * 3;  /* RGB888 */
             if (fb0) {
                 memset(fb0, 0, fb_size);
                 esp_cache_msync(fb0, fb_size,
@@ -239,7 +235,8 @@ static esp_lcd_panel_handle_t hdmi_init(void)
     esp_lcd_panel_disp_on_off(panel, true);
     ESP_LOGI(TAG, "HDMI: step 5 OK");
 
-    ESP_LOGI(TAG, "HDMI: 800x600@60Hz ready%s",
+    ESP_LOGI(TAG, "HDMI: %dx%d@%dMHz ready%s",
+             CONFIG_LT8912B_HACT, CONFIG_LT8912B_VACT, CONFIG_LT8912B_PCLK_MHZ,
              esp_lcd_lt8912b_is_connected() ? " (cable connected)" : " (no cable)");
     return panel;
 }

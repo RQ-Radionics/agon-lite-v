@@ -82,7 +82,11 @@ CONFIG_LT8912B_DSI_LANES=2
 CONFIG_LT8912B_DSI_LANE_MBPS=896
 # Video timing — 1024×768@60.05Hz
 # htotal=1220 (hfp=48 hs=8 hbp=140)  vtotal=819 (vfp=3 vs=6 vbp=42)
-# DDS: 60 * 0x16C16 = 0x555528
+# 1024x768 standard: hsync=+, vsync=-
+# DDS: kernel upstream default (0xff/0x56/0x69) — chip derives TMDS from DSI clock
+# Settle: 0x08 per upstream kernel for vactive > 600 (not 0x10)
+# Polarity: reg 0xAB bit0=vsync, bit1=hsync (upstream kernel order)
+#   hsync+=1→bit1, vsync-=0→bit0 → 0xAB = 0x02
 CONFIG_LT8912B_HACT=1024
 CONFIG_LT8912B_VACT=768
 CONFIG_LT8912B_PCLK_MHZ=60
@@ -94,10 +98,10 @@ CONFIG_LT8912B_VFP=3
 CONFIG_LT8912B_VBP=42
 CONFIG_LT8912B_HSYNC_POL=1
 CONFIG_LT8912B_VSYNC_POL=0
-CONFIG_LT8912B_SETTLE=0x10
-CONFIG_LT8912B_DDS_0=0x28
-CONFIG_LT8912B_DDS_1=0x55
-CONFIG_LT8912B_DDS_2=0x55
+CONFIG_LT8912B_SETTLE=0x08
+CONFIG_LT8912B_DDS_0=0xFF
+CONFIG_LT8912B_DDS_1=0x56
+CONFIG_LT8912B_DDS_2=0x69
 
 # mos_kbd component — USB HID keyboard via IDF usb_host (no managed component)
 CONFIG_MOS_KBD_ENABLED=y

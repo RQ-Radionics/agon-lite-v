@@ -128,31 +128,32 @@ menu "LT8912B HDMI Bridge"
 
     config LT8912B_SETTLE
         hex "MIPI DSI settle register (0x49:0x11)"
-        default 0x10
+        default 0x08
         help
             MIPI DSI settle time register value.
-            0x04 for vactive <= 600, 0x10 for vactive >= 768.
+            Upstream Linux kernel uses: 0x04 for vactive<=600, 0x08 for
+            vactive>600 (including 768), 0x0a for vactive==1080.
 
     config LT8912B_DDS_0
         hex "DDS frequency word byte 0 (LSB, reg 0x4E)"
-        default 0x28
+        default 0xFF
         help
-            strm_sw_freq_word[7:0] = (pclk_mhz * 0x16C16) & 0xFF.
-            60 MHz: 60 * 0x16C16 = 0x555528 → byte0=0x28.
+            strm_sw_freq_word[7:0].
+            Upstream kernel default: 0xFF. The LT8912B derives TMDS clock
+            from the live DSI bit clock, not from this DDS word directly.
+            Use the upstream kernel values (0xFF/0x56/0x69) for all resolutions.
 
     config LT8912B_DDS_1
         hex "DDS frequency word byte 1 (reg 0x4F)"
-        default 0x55
+        default 0x56
         help
-            strm_sw_freq_word[15:8] = (pclk_mhz * 0x16C16 >> 8) & 0xFF.
-            60 MHz: 0x555528 → byte1=0x55.
+            strm_sw_freq_word[15:8]. Upstream kernel default: 0x56.
 
     config LT8912B_DDS_2
         hex "DDS frequency word byte 2 (MSB, reg 0x50)"
-        default 0x55
+        default 0x69
         help
-            strm_sw_freq_word[23:16] = (pclk_mhz * 0x16C16 >> 16) & 0xFF.
-            60 MHz: 0x555528 → byte2=0x55.
+            strm_sw_freq_word[23:16]. Upstream kernel default: 0x69.
 
     endif # LT8912B_ENABLED
 
