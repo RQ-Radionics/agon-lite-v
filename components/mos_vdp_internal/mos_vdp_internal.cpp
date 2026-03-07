@@ -480,9 +480,70 @@ static int s_gfx_fg = 15;
 static int s_gfx_bg = 0;
 
 /* ------------------------------------------------------------------ */
+/* Text position state (declared early — needed by cursor functions)    */
+/* ------------------------------------------------------------------ */
+static int  s_col = 0, s_row = 0;
+static int  s_fg  = 15;
+static int  s_bg  = 0;
+static int  s_vp_left = 0, s_vp_top = 0;
+static int  s_vp_right = 79, s_vp_bottom = 59;
+
+/* ------------------------------------------------------------------ */
 /* Cursor state                                                         */
 /* ------------------------------------------------------------------ */
-static bool s_cursor_visible = true;
+static bool s_cursor_visible = true;   /* VDU 23,1 — user enable/disable */
+static bool s_cursor_shown   = false;  /* true = XOR block currently on FB */
+static bool s_cursor_blink_on = true;  /* current blink phase (true = show) */
+
+/* XOR a cursor block into/out of the FB at current (s_col, s_row).
+ * Calling twice returns the FB to its original state. */
+static void cursor_xor(void)
+{
+    if (!fb_draw()) return;
+    int phys_x = s_off_x + s_col * FONT_W * s_scale;
+    int phys_y = s_off_y + s_row * FONT_H * s_scale;
+    int pw = FONT_W * s_scale;
+    int ph = FONT_H * s_scale;
+    int x0 = phys_x < 0 ? 0 : phys_x;
+    int y0 = phys_y < 0 ? 0 : phys_y;
+    int x1 = phys_x + pw; if (x1 > FB_W) x1 = FB_W;
+    int y1 = phys_y + ph; if (y1 > FB_H) y1 = FB_H;
+    if (x0 >= x1 || y0 >= y1) return;
+    uint8_t *fb = fb_draw();
+    for (int y = y0; y < y1; y++) {
+        uint8_t *p = fb + (y * FB_W + x0) * BYTES_PER_PIX;
+        for (int x = x0; x < x1; x++, p += BYTES_PER_PIX) {
+            p[0] ^= 0xFF; p[1] ^= 0xFF; p[2] ^= 0xFF;
+        }
+    }
+}
+
+/* Remove cursor from FB if it is currently drawn. */
+static void cursor_hide(void)
+{
+    if (s_cursor_shown) {
+        cursor_xor();
+        s_cursor_shown = false;
+    }
+}
+
+/* Draw cursor onto FB if it should be visible (enabled + blink phase ON). */
+static void cursor_show(void)
+{
+    if (s_cursor_visible && s_cursor_blink_on && !s_cursor_shown) {
+        cursor_xor();
+        s_cursor_shown = true;
+    }
+}
+
+/* Toggle blink phase — called from render task every ~640 ms.
+ * Does not flush; the caller's fb_flush_now() will push the change. */
+static void cursor_blink_toggle(void)
+{
+    cursor_hide();
+    s_cursor_blink_on = !s_cursor_blink_on;
+    cursor_show();
+}
 
 /* ------------------------------------------------------------------ */
 /* Low-level pixel plot (with GCOL mode applied)                       */
@@ -608,15 +669,8 @@ static void fb_flip_now(void)
 }
 
 /* ------------------------------------------------------------------ */
-/* Text cursor state                                                    */
+/* Text colour state                                                    */
 /* ------------------------------------------------------------------ */
-static int  s_col = 0, s_row = 0;
-static int  s_fg  = 15;
-static int  s_bg  = 0;
-
-/* Text viewport (character coordinates, inclusive) */
-static int s_vp_left = 0, s_vp_top = 0;
-static int s_vp_right = 79, s_vp_bottom = 59;
 
 /* ------------------------------------------------------------------ */
 /* Low-level character rendering                                        */
@@ -1417,17 +1471,25 @@ static void vdp_render_task(void *arg)
     while (1) {
         if (xQueueReceive(s_vdu_queue, &byte, pdMS_TO_TICKS(16)) == pdTRUE) {
             if (s_fb_mutex) xSemaphoreTake(s_fb_mutex, portMAX_DELAY);
+            cursor_hide();   /* remove cursor before any VDU drawing */
             vdu_process(byte);
             /* Drain the queue fully before flushing — avoids a draw_bitmap
              * call per byte when thousands of PLOTs are in flight. */
             while (xQueueReceive(s_vdu_queue, &byte, 0) == pdTRUE) {
                 vdu_process(byte);
             }
+            cursor_show();   /* restore cursor when queue is empty */
             if (s_fb_mutex) xSemaphoreGive(s_fb_mutex);
         }
         /* Flush at ~60Hz from task context — safe for draw_bitmap / DMA */
         if (s_fb_dirty) {
             if (s_fb_mutex) xSemaphoreTake(s_fb_mutex, portMAX_DELAY);
+            /* Cursor blink: toggle every ~38 frames (~640 ms at 60 Hz) */
+            static int s_blink_ctr = 0;
+            if (++s_blink_ctr >= 38) {
+                s_blink_ctr = 0;
+                cursor_blink_toggle();
+            }
             fb_flush_now();
             if (s_fb_mutex) xSemaphoreGive(s_fb_mutex);
         }
@@ -1511,6 +1573,7 @@ static void mode_set(uint8_t mode)
     sprites_reset_all();
     bitmaps_reset_all();
     clear_screen();
+    s_cursor_shown = false;   /* screen cleared — XOR gone */
     s_col = 0; s_row = 0;
 
     /* Mode 7: initialise teletext engine */
@@ -1618,6 +1681,7 @@ static void vdu_process(uint8_t c)
                 s_col = 0; s_row = 0;
             } else {
                 clear_screen();
+                s_cursor_shown = false;   /* screen cleared — XOR gone */
                 s_col = s_vp_left;
                 s_row = s_vp_top;
             }
@@ -2558,6 +2622,8 @@ esp_err_t mos_vdp_internal_init(esp_lcd_panel_handle_t dpi_panel)
     s_col = 0; s_row = 0;
     s_vdu_state = VDU_STATE_NORMAL;
     s_cursor_visible = true;
+    s_cursor_shown   = false;   /* FB was just cleared — no XOR on screen */
+    s_cursor_blink_on = true;
     s_kbd = {false, false, false, false, false, false, false};
     udg_reset_all();
 
