@@ -572,9 +572,14 @@ static int  s_vp_right = 79, s_vp_bottom = 59;
 /* ------------------------------------------------------------------ */
 static bool s_cursor_visible = true;   /* VDU 23,1 — user enable/disable */
 static uint8_t s_cursor_behaviour = 0; /* VDU 23,16 — behaviour flags */
-/* Bit 0 (scrollProtect): when set, cursor stops at last cell instead of scrolling.
- * Bit 1 (invertH), bit 2 (invertV), bit 3 (flipXY), bit 4 (yWrap): not yet used. */
-#define CURSOR_SCROLL_PROTECT  0x01
+/* Cursor behaviour bits (matches fab-agon-emulator CursorBehaviour union) */
+#define CURSOR_SCROLL_PROTECT   0x01  /* bit 0: stop at edge, no scroll */
+#define CURSOR_INVERT_H         0x02  /* bit 1: reverse horizontal direction */
+#define CURSOR_INVERT_V         0x04  /* bit 2: reverse vertical direction */
+#define CURSOR_FLIP_XY          0x08  /* bit 3: swap X/Y axes (vertical text) */
+#define CURSOR_Y_WRAP           0x10  /* bit 4: wrap instead of scroll */
+#define CURSOR_X_HOLD           0x20  /* bit 5: don't advance X after char */
+#define CURSOR_GR_NO_SPECIAL    0x40  /* bit 6: graphics cursor — no edge action */
 static bool s_cursor_shown   = false;  /* true = XOR block currently on FB */
 static bool s_cursor_blink_on = true;  /* current blink phase (true = show) */
 
@@ -882,36 +887,126 @@ static void scroll_up(void)
     }
 }
 
-static void cursor_advance(void)
+/* ------------------------------------------------------------------ */
+/* Cursor movement primitives — respect s_cursor_behaviour flags       */
+/* ------------------------------------------------------------------ */
+
+/* Move cursor one step in the logical "down" direction.
+ * With invertV: moves up. With flipXY: moves right instead.
+ * Scrolls or wraps at the bottom edge unless scrollProtect is set. */
+static void cursor_down(void)
 {
-    s_col++;
-    if (s_col > s_vp_right) {
-        if (s_cursor_behaviour & CURSOR_SCROLL_PROTECT) {
-            /* scrollProtect: stay on last cell, do not wrap or scroll */
+    if (s_cursor_behaviour & CURSOR_FLIP_XY) {
+        /* flipXY: "down" → advance X */
+        s_col += (s_cursor_behaviour & CURSOR_INVERT_H) ? -1 : 1;
+        if (s_col > s_vp_right) {
             s_col = s_vp_right;
-            return;
+        } else if (s_col < s_vp_left) {
+            s_col = s_vp_left;
         }
-        s_col = s_vp_left;
-        s_row++;
-        if (s_row > s_vp_bottom) {
+        return;
+    }
+    int dir = (s_cursor_behaviour & CURSOR_INVERT_V) ? -1 : 1;
+    s_row += dir;
+    int edge = (dir > 0) ? s_vp_bottom : s_vp_top;
+    if ((dir > 0 && s_row > s_vp_bottom) || (dir < 0 && s_row < s_vp_top)) {
+        if (s_cursor_behaviour & CURSOR_SCROLL_PROTECT) {
+            s_row = edge;
+        } else if (s_cursor_behaviour & CURSOR_Y_WRAP) {
+            s_row = (dir > 0) ? s_vp_top : s_vp_bottom;
+        } else {
             scroll_up();
-            s_row = s_vp_bottom;
+            s_row = edge;
         }
     }
 }
 
+/* Move cursor one step in the logical "up" direction. */
+static void cursor_up(void)
+{
+    if (s_cursor_behaviour & CURSOR_FLIP_XY) {
+        s_col += (s_cursor_behaviour & CURSOR_INVERT_H) ? 1 : -1;
+        if (s_col > s_vp_right) s_col = s_vp_right;
+        if (s_col < s_vp_left)  s_col = s_vp_left;
+        return;
+    }
+    int dir = (s_cursor_behaviour & CURSOR_INVERT_V) ? 1 : -1;
+    s_row += dir;
+    if (s_row < s_vp_top)    s_row = s_vp_top;
+    if (s_row > s_vp_bottom) s_row = s_vp_bottom;
+}
+
+/* Move cursor one step in the logical "right" direction.
+ * With invertH: moves left. With flipXY: moves down instead.
+ * At right edge: CR+LF (or stop/wrap per flags). */
+static void cursor_right(void)
+{
+    if (s_cursor_behaviour & CURSOR_FLIP_XY) {
+        /* flipXY: "right" → move down */
+        cursor_down();
+        return;
+    }
+    int dir = (s_cursor_behaviour & CURSOR_INVERT_H) ? -1 : 1;
+    s_col += dir;
+    int edge = (dir > 0) ? s_vp_right : s_vp_left;
+    if ((dir > 0 && s_col > s_vp_right) || (dir < 0 && s_col < s_vp_left)) {
+        if (s_cursor_behaviour & CURSOR_SCROLL_PROTECT) {
+            s_col = edge;  /* stop at edge */
+        } else {
+            /* CR + LF */
+            s_col = (dir > 0) ? s_vp_left : s_vp_right;
+            cursor_down();
+        }
+    }
+}
+
+/* Move cursor one step left (logical "backspace" direction). */
+static void cursor_left(void)
+{
+    if (s_cursor_behaviour & CURSOR_FLIP_XY) {
+        cursor_up();
+        return;
+    }
+    int dir = (s_cursor_behaviour & CURSOR_INVERT_H) ? 1 : -1;
+    s_col += dir;
+    if (s_col < s_vp_left) {
+        if (s_row > s_vp_top) { s_row--; s_col = s_vp_right; }
+        else { s_col = s_vp_left; }
+    } else if (s_col > s_vp_right) {
+        if (s_row < s_vp_bottom) { s_row++; s_col = s_vp_left; }
+        else { s_col = s_vp_right; }
+    }
+}
+
+/* Carriage return — home X (or Y with flipXY). */
+static void cursor_cr(void)
+{
+    if (s_cursor_behaviour & CURSOR_FLIP_XY) {
+        s_row = (s_cursor_behaviour & CURSOR_INVERT_V) ? s_vp_bottom : s_vp_top;
+    } else {
+        s_col = (s_cursor_behaviour & CURSOR_INVERT_H) ? s_vp_right : s_vp_left;
+    }
+}
+
+/* Home cursor to top-left (or bottom-right with invert flags). */
+static void cursor_home(void)
+{
+    s_col = (s_cursor_behaviour & CURSOR_INVERT_H) ? s_vp_right : s_vp_left;
+    s_row = (s_cursor_behaviour & CURSOR_INVERT_V) ? s_vp_bottom : s_vp_top;
+}
+
+/* Advance cursor after printing a character.
+ * Respects xHold (don't move), flipXY, invertH, scrollProtect, yWrap. */
+static void cursor_advance(void)
+{
+    if (s_cursor_behaviour & CURSOR_X_HOLD) return;  /* xHold: stay put */
+    cursor_right();
+}
+
+/* Newline (LF) — move in logical "down" direction. */
 static void newline(void)
 {
-    s_row++;
-    if (s_row > s_vp_bottom) {
-        if (s_cursor_behaviour & CURSOR_SCROLL_PROTECT) {
-            /* scrollProtect: stay on last row, do not scroll */
-            s_row = s_vp_bottom;
-            return;
-        }
-        scroll_up();
-        s_row = s_vp_bottom;
-    }
+    cursor_down();
 }
 
 /* ------------------------------------------------------------------ */
@@ -1759,17 +1854,11 @@ static void vdu_process(uint8_t c)
         case 0x05: /* VDU 5 — graphics cursor mode (ignored) */          break;
         case 0x06: /* VDU 6 — resume VDU (ignored) */                    break;
         case 0x07: /* VDU 7 — BEL (ignored for now, audio TODO) */       break;
-        case 0x08: /* VDU 8 — backspace */
-            if (s_col > s_vp_left) {
-                s_col--;
-            } else if (s_row > s_vp_top) {
-                s_row--;
-                s_col = s_vp_right;
-            }
+        case 0x08: /* VDU 8 — backspace (cursor left) */
+            cursor_left();
             break;
         case 0x09: /* VDU 9 — cursor right */
-            s_col++;
-            if (s_col > s_vp_right) s_col = s_vp_right;
+            cursor_right();
             break;
         case 0x0A: /* VDU 10 — LF */
             if (s_ttxt_mode) {
@@ -1784,7 +1873,7 @@ static void vdu_process(uint8_t c)
             fb_flush_now();
             break;
         case 0x0B: /* VDU 11 — cursor up */
-            if (s_row > s_vp_top) s_row--;
+            cursor_up();
             break;
         case 0x0C: /* VDU 12 — CLS */
             if (s_ttxt_mode) {
@@ -1799,7 +1888,7 @@ static void vdu_process(uint8_t c)
             fb_flush_now();
             break;
         case 0x0D: /* VDU 13 — CR */
-            s_col = s_vp_left;
+            cursor_cr();
             break;
         case 0x0E: /* VDU 14 — page mode on (ignored) */   break;
         case 0x0F: /* VDU 15 — page mode off (ignored) */  break;
@@ -1865,8 +1954,7 @@ static void vdu_process(uint8_t c)
             s_arg_idx = 0;
             break;
         case 0x1E: /* VDU 30 — cursor home */
-            s_col = s_vp_left;
-            s_row = s_vp_top;
+            cursor_home();
             break;
         case 0x1F: /* VDU 31 — cursor to x,y */
             s_vdu_state = VDU_STATE_VDU31_1;
