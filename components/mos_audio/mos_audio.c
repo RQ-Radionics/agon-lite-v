@@ -27,7 +27,6 @@
 static const char *TAG = "mos_audio";
 
 static i2s_chan_handle_t             s_i2s_tx      = NULL;
-static i2s_chan_handle_t             s_i2s_rx      = NULL;
 static const audio_codec_data_if_t *s_i2s_data_if = NULL;
 static esp_codec_dev_handle_t        s_spk_dev     = NULL;
 static i2c_master_bus_handle_t       s_i2c_bus     = NULL;
@@ -39,11 +38,16 @@ static bool                          s_initialized = false;
 /* ------------------------------------------------------------------ */
 static esp_err_t audio_i2s_init(void)
 {
+    /* TX-only: pass NULL for rx so IDF does not allocate an RX channel.
+     * The Olimex ESP32-P4-PC has no microphone on the ES8311 AINL/AINR
+     * pins — an enabled RX channel causes the codec layer to activate the
+     * ADC, and floating ADC inputs produce white noise injected into the
+     * DAC output path. */
     i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(
         CONFIG_MOS_AUDIO_I2S_NUM, I2S_ROLE_MASTER);
     chan_cfg.auto_clear = true;
     ESP_RETURN_ON_ERROR(
-        i2s_new_channel(&chan_cfg, &s_i2s_tx, &s_i2s_rx),
+        i2s_new_channel(&chan_cfg, &s_i2s_tx, NULL),
         TAG, "i2s_new_channel");
 
     /* 16384 Hz mono 16-bit — canonical Agon / BBC Micro audio rate.
@@ -57,38 +61,32 @@ static esp_err_t audio_i2s_init(void)
             .bclk = CONFIG_MOS_AUDIO_I2S_BCLK_GPIO,
             .ws   = CONFIG_MOS_AUDIO_I2S_WS_GPIO,
             .dout = CONFIG_MOS_AUDIO_I2S_DOUT_GPIO,
-            .din  = CONFIG_MOS_AUDIO_I2S_DIN_GPIO,
+            .din  = I2S_GPIO_UNUSED,   /* no capture */
             .invert_flags = { false, false, false },
         },
     };
 
     ESP_RETURN_ON_ERROR(
         i2s_channel_init_std_mode(s_i2s_tx, &std_cfg), TAG, "i2s_init TX");
+
     /* Pre-load all DMA TX buffers with silence before enabling the channel.
      * Without this, uninitialised DMA buffer memory is sent to the ES8311
      * DAC as white noise from the moment i2s_channel_enable() is called
-     * until the synth task writes its first real buffer.
-     * i2s_channel_preload_data() fills DMA descriptors while the channel
-     * is still disabled; the codec only ever sees zeros at rest. */
+     * until the synth task writes its first real buffer. */
     {
         static const int16_t silence[256] = {0};
         size_t loaded = 0;
-        /* Keep calling until preload returns 0 bytes loaded (DMA full) */
         do {
             i2s_channel_preload_data(s_i2s_tx, silence, sizeof(silence), &loaded);
         } while (loaded > 0);
     }
     ESP_RETURN_ON_ERROR(
         i2s_channel_enable(s_i2s_tx), TAG, "i2s_enable TX");
-    ESP_RETURN_ON_ERROR(
-        i2s_channel_init_std_mode(s_i2s_rx, &std_cfg), TAG, "i2s_init RX");
-    ESP_RETURN_ON_ERROR(
-        i2s_channel_enable(s_i2s_rx), TAG, "i2s_enable RX");
 
     audio_codec_i2s_cfg_t i2s_cfg = {
         .port      = CONFIG_MOS_AUDIO_I2S_NUM,
         .tx_handle = s_i2s_tx,
-        .rx_handle = s_i2s_rx,
+        .rx_handle = NULL,   /* DAC-only */
     };
     s_i2s_data_if = audio_codec_new_i2s_data(&i2s_cfg);
     ESP_RETURN_ON_FALSE(s_i2s_data_if, ESP_ERR_NO_MEM,
@@ -253,8 +251,7 @@ void mos_audio_deinit(void)
     s_spk_dev = NULL;
 
     i2s_del_channel(s_i2s_tx);
-    i2s_del_channel(s_i2s_rx);
-    s_i2s_tx = s_i2s_rx = NULL;
+    s_i2s_tx = NULL;
     s_i2s_data_if = NULL;
 
     if (s_bus_owned && s_i2c_bus) {
