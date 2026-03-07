@@ -233,6 +233,13 @@ static esp_lcd_panel_handle_t hdmi_init(void)
     }
     esp_lcd_panel_init(panel);
     esp_lcd_panel_disp_on_off(panel, true);
+
+    /* Re-trigger LT8912B MIPI RX lock now that DPI is emitting live DSI data.
+     * The initial rxlogicres in lt8912b_init fires before DPI exists, so the
+     * chip's PLL has nothing to lock onto.  This call does the real lock. */
+    vTaskDelay(pdMS_TO_TICKS(50));   /* let DPI stabilise */
+    esp_lcd_lt8912b_post_dpi_enable();
+
     ESP_LOGI(TAG, "HDMI: step 5 OK");
 
     ESP_LOGI(TAG, "HDMI: %dx%d@%dMHz ready%s",
