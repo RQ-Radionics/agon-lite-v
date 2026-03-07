@@ -130,6 +130,20 @@ esp_err_t esp_lcd_lt8912b_patch_dsi_eotp(esp_lcd_dsi_bus_handle_t dsi_bus);
 i2c_master_bus_handle_t esp_lcd_lt8912b_get_i2c_bus(void);
 
 /**
+ * @brief Re-trigger MIPI RX lock and HDMI output after DPI panel is running.
+ *
+ * The LT8912B's rxlogicres PLL lock (reg 0x03 pulse) must be done AFTER
+ * the DPI panel is emitting live DSI data, otherwise the chip has nothing
+ * to lock onto.  Call this after esp_lcd_panel_init() + a short delay.
+ *
+ * Also reads diagnostic registers 0x9C-0x9F to log the detected hsync/vsync
+ * counts, which confirms whether DSI data is reaching the LT8912B at all.
+ *
+ * @return ESP_OK, or error from I2C.
+ */
+esp_err_t esp_lcd_lt8912b_post_dpi_enable(void);
+
+/**
  * @brief De-initialize and release I2C resources.
  *
  * Call this only when tearing down the display subsystem entirely.
