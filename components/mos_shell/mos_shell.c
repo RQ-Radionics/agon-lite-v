@@ -33,6 +33,7 @@
 #include "mos_types.h"
 #include "esp_heap_caps.h"
 #include "mos_loader.h"
+#include "mos_wifi.h"
 
 /* Shell-specific MATCH flags for command lookup */
 #define SHELL_MATCH_CMD  (MATCH_CASE_INSENSITIVE | MATCH_BEGINS_WITH | \
@@ -84,6 +85,7 @@ static int cmd_TRY(char *ptr);
 static int cmd_TYPE(char *ptr);
 static int cmd_UNSET(char *ptr);
 static int cmd_RUN(char *ptr);
+static int cmd_WIFI(char *ptr);
 
 /* -------------------------------------------------------------------------
  * Command table (order matters for abbreviation matching)
@@ -126,7 +128,8 @@ static t_mosCommand s_commands[] = {
     { "Try",        cmd_TRY,        false, "<cmd>",                "Run command, ignore failure" },
     { "Type",       cmd_TYPE,       true,  "<file>",               "Display file contents" },
     { "Unset",      cmd_UNSET,      false, "<var>",                "Delete system variable" },
-    { "Run",        cmd_RUN,        true,  "<file> [args]",         "Load and run a binary from filesystem" },
+    { "Run",        cmd_RUN,        true,  "<file> [args]",        "Load and run a binary from filesystem" },
+    { "WiFi",       cmd_WIFI,       false, "<essid> <password>",   "Connect to WiFi and save config" },
     { NULL, NULL, false, NULL, NULL }
 };
 
@@ -1364,6 +1367,45 @@ static int cmd_RUN(char *ptr)
         mos_printf("RUN: program exited with code %d\r\n", ret);
     }
     return FR_OK;
+}
+
+/* -------------------------------------------------------------------------
+ * CMD: WIFI <essid> <password>
+ * Connect to WiFi network and save credentials to /sdcard/wifi.cfg.
+ * ------------------------------------------------------------------------- */
+static int cmd_WIFI(char *ptr)
+{
+#if CONFIG_MOS_WIFI_ENABLED
+    char *ssid, *password;
+    int r = extractString(ptr, &ptr, NULL, &ssid, EXTRACT_FLAG_AUTO_TERMINATE);
+    if (r != FR_OK) {
+        mos_printf("Usage: WiFi <essid> <password>\r\n");
+        return FR_OK;
+    }
+    r = extractString(ptr, &ptr, NULL, &password, EXTRACT_FLAG_AUTO_TERMINATE);
+    if (r != FR_OK) {
+        mos_printf("Usage: WiFi <essid> <password>\r\n");
+        return FR_OK;
+    }
+
+    mos_printf("Connecting to '%s'...\r\n", ssid);
+    int rc = mos_wifi_connect(ssid, password, 15000);
+    if (rc == 0) {
+        mos_printf("WiFi OK  IP: %s\r\n", mos_wifi_ip());
+        if (mos_wifi_save_config(ssid, password) == 0) {
+            mos_printf("Config saved to wifi.cfg\r\n");
+        } else {
+            mos_printf("Warning: could not save wifi.cfg\r\n");
+        }
+    } else {
+        mos_printf("WiFi FAIL — check ESSID and password\r\n");
+    }
+    return FR_OK;
+#else
+    (void)ptr;
+    mos_printf("WiFi not supported on this build\r\n");
+    return FR_OK;
+#endif
 }
 
 /* -------------------------------------------------------------------------

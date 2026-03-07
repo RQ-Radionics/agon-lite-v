@@ -13,14 +13,34 @@
 #if CONFIG_MOS_WIFI_ENABLED
 
 /**
- * Initialise WiFi in STA mode and connect using credentials from
- * wifi_credentials.h.  Blocks until connected or max_wait_ms elapses.
+ * Initialise WiFi in STA mode and connect.
+ * Credentials are read from /sdcard/wifi.cfg (lines: ssid=... / password=...).
+ * Falls back to wifi_credentials.h if the file is absent or unreadable.
+ * Blocks until connected or max_wait_ms elapses.
  *
  * @param max_wait_ms  Maximum time to wait for IP address (ms).
  *                     Pass 0 to wait indefinitely.
  * @return  0 on success (IP obtained), -1 on timeout/error.
  */
 int  mos_wifi_init(uint32_t max_wait_ms);
+
+/**
+ * Connect (or reconnect) to a specific AP with the given credentials.
+ * If WiFi was already initialised, reconfigures and reconnects.
+ * Blocks until connected or max_wait_ms elapses.
+ *
+ * @param ssid         Network name (max 32 chars).
+ * @param password     Passphrase (max 63 chars, or "" for open networks).
+ * @param max_wait_ms  Maximum time to wait for IP address (ms).
+ * @return  0 on success (IP obtained), -1 on timeout/error.
+ */
+int  mos_wifi_connect(const char *ssid, const char *password, uint32_t max_wait_ms);
+
+/**
+ * Write ssid and password to /sdcard/wifi.cfg so they persist across reboots.
+ * @return  0 on success, -1 on error.
+ */
+int  mos_wifi_save_config(const char *ssid, const char *password);
 
 /** Returns true if WiFi is connected and an IP address has been assigned. */
 bool mos_wifi_is_connected(void);
@@ -31,9 +51,11 @@ const char *mos_wifi_ip(void);
 #else /* !CONFIG_MOS_WIFI_ENABLED */
 
 /* Stubs for boards without WiFi — all callers work without #ifdef */
-static inline int  mos_wifi_init(uint32_t max_wait_ms) { (void)max_wait_ms; return -1; }
-static inline bool mos_wifi_is_connected(void)          { return false; }
-static inline const char *mos_wifi_ip(void)             { return NULL; }
+static inline int  mos_wifi_init(uint32_t ms)                                       { (void)ms; return -1; }
+static inline int  mos_wifi_connect(const char *s, const char *p, uint32_t ms)      { (void)s; (void)p; (void)ms; return -1; }
+static inline int  mos_wifi_save_config(const char *s, const char *p)               { (void)s; (void)p; return -1; }
+static inline bool mos_wifi_is_connected(void)                                       { return false; }
+static inline const char *mos_wifi_ip(void)                                          { return NULL; }
 
 #endif /* CONFIG_MOS_WIFI_ENABLED */
 
