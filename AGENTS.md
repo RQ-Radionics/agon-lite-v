@@ -180,9 +180,12 @@ ample room in the 96KB remaining after init allocations.
   - Fixed 640×480@60Hz HDMI output (all 18 Agon video modes scaled to this)
   - EoTP patch in separate compilation unit (avoids TAG macro conflict with IDF)
   - HPD detect via GPIO15 + I2C register 0x48:0xC1 bit7
-- **`mos_audio` driver**: ES8311 codec I2S+I2C 16384 Hz mono (esp32-mos-sj7, closed)
-  - `components/mos_audio/` — direct ES8311 register init, I2S0 APLL
-  - GPIO6 = CODEC_PWR_DIS# (drive LOW to enable)
+- **`mos_audio` driver**: ES8311 codec I2S+I2C 16384 Hz stereo (esp32-mos-sj7, closed ✅ confirmed working on hardware)
+  - `components/mos_audio/` — `es8311_local.c/h` direct driver (new I2C master API), I2S0 APLL
+  - GPIO6 = CODEC_PWR_DIS# (drive LOW to enable), GPIO53 = PA enable (active HIGH)
+  - White noise fix: `es8311_adc_power_down()` after init (REG0E=0x32, REG15=0, REG17=0)
+  - I2S configured STEREO; `mos_audio_write()` expands mono samples to L+R internally
+  - `esp_codec_dev` managed component removed entirely — not needed
 - **`mos_kbd` driver**: USB HID keyboard via FE1.1s hub (esp32-mos-7x7, closed)
   - `components/mos_kbd/` — full HID boot-protocol keyboard, PS/2 Set 2 scancodes
   - `espressif/usb_host_hid ^1.1.0` managed component (auto-downloaded)
@@ -247,4 +250,16 @@ flash the storage partition (only the firmware binary).
 - I2C driver (issue esp32-mos-h4x)
 - More shell commands (TYPE, DEL, RENAME, COPY, CD, MKDIR)
 - USB SPLIT transactions para FS/LS devices via HS hub (esp32-mos-8pe)
+
+### Audio ES8311 — FIX CONFIRMED (commit b482adc, session 7)
+**Root cause**: `esp_codec_dev` calls `es8311_start()` unconditionally which writes
+ADC_REG17=0xBF and ADC_REG15=0x40, activating the ADC with floating AINL/AINR → white noise.
+
+**Fix**: Replaced `esp_codec_dev` with `es8311_local.c/h` (direct ES8311 driver using new
+I2C master API). After `es8311_init()`, call `es8311_adc_power_down()`:
+- REG0E=0x32 → power down ADC PGA + modulator (DAC bias kept)
+- REG15=0x00, REG17=0x00 → ADC path fully silenced
+
+I2S changed to STEREO (required by ES8311 LRCK framing); `mos_audio_write()` handles
+mono→stereo expansion. `esp_codec_dev` removed from `idf_component.yml`.
 
