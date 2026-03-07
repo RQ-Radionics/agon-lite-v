@@ -80,22 +80,23 @@ CONFIG_LT8912B_DSI_LANES=2
 # Bandwidth: 60MHz × 24bpp / 2lanes = 720 Mbps < 896 Mbps ✓
 # Tx Analog: 0xE1/0xE1/0x0C (BSP values, higher drive for >= 530 Mbps)
 CONFIG_LT8912B_DSI_LANE_MBPS=896
-# Video timing — 1024×768@60.05Hz
-# htotal=1220 (hfp=48 hs=8 hbp=140)  vtotal=819 (vfp=3 vs=6 vbp=42)
-# 1024x768 standard: hsync=+, vsync=-
-# DDS: kernel upstream default (0xff/0x56/0x69) — chip derives TMDS from DSI clock
-# Settle: 0x08 per upstream kernel for vactive > 600 (not 0x10)
-# Polarity: reg 0xAB bit0=vsync, bit1=hsync (upstream kernel order)
-#   hsync+=1→bit1, vsync-=0→bit0 → 0xAB = 0x02
+# Video timing — 1024×768@59.985Hz, pclk=60MHz (PLL_F240M/4, exact)
+# VESA standard proportions scaled to 60 MHz:
+#   VESA 65MHz: htotal=1344 vtotal=806 -> at 60MHz: htotal=1241 vtotal=806
+#   hblank=217: hfp=14 hs=83 hbp=120 (VESA proportions, hs=83 not 8!)
+#   vblank=38:  vfp=3  vs=6  vbp=29  (VESA standard)
+# hs=83 (vs hs=8 before) — critical: LT8912B PLL needs wide enough hsync to lock
+# DDS: Espressif official value (0x93/0x3E/0x29)
+# Polarity: reg 0xAB bit0=vsync bit1=hsync; 1024x768 hsync+ vsync- → 0x02
 CONFIG_LT8912B_HACT=1024
 CONFIG_LT8912B_VACT=768
 CONFIG_LT8912B_PCLK_MHZ=60
-CONFIG_LT8912B_HS=8
-CONFIG_LT8912B_HFP=48
-CONFIG_LT8912B_HBP=140
+CONFIG_LT8912B_HS=83
+CONFIG_LT8912B_HFP=14
+CONFIG_LT8912B_HBP=120
 CONFIG_LT8912B_VS=6
 CONFIG_LT8912B_VFP=3
-CONFIG_LT8912B_VBP=42
+CONFIG_LT8912B_VBP=29
 CONFIG_LT8912B_HSYNC_POL=1
 CONFIG_LT8912B_VSYNC_POL=0
 CONFIG_LT8912B_SETTLE=0x08
