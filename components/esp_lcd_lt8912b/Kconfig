@@ -136,24 +136,24 @@ menu "LT8912B HDMI Bridge"
 
     config LT8912B_DDS_0
         hex "DDS frequency word byte 0 (LSB, reg 0x4E)"
-        default 0xFF
+        default 0x93
         help
             strm_sw_freq_word[7:0].
-            Upstream kernel default: 0xFF. The LT8912B derives TMDS clock
-            from the live DSI bit clock, not from this DDS word directly.
-            Use the upstream kernel values (0xFF/0x56/0x69) for all resolutions.
+            Espressif official esp_lcd_lt8912b component uses 0x93/0x3E/0x29.
+            These values are used for normal (non-test-pattern) video mode.
+            For test pattern mode only, the formula pclk_mhz * 0x16C16 is used.
 
     config LT8912B_DDS_1
         hex "DDS frequency word byte 1 (reg 0x4F)"
-        default 0x56
+        default 0x3E
         help
-            strm_sw_freq_word[15:8]. Upstream kernel default: 0x56.
+            strm_sw_freq_word[15:8]. Espressif official value: 0x3E.
 
     config LT8912B_DDS_2
         hex "DDS frequency word byte 2 (MSB, reg 0x50)"
-        default 0x69
+        default 0x29
         help
-            strm_sw_freq_word[23:16]. Upstream kernel default: 0x69.
+            strm_sw_freq_word[23:16]. Espressif official value: 0x29.
 
     endif # LT8912B_ENABLED
 

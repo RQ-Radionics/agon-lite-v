@@ -98,11 +98,23 @@ static esp_err_t lt_read(i2c_master_dev_handle_t dev,
 /* Register sequences (upstream Linux kernel lontium-lt8912b.c)        */
 /* ------------------------------------------------------------------ */
 
-/* Step 1: Digital clock enable + analog power-up (ADDR_MAIN = 0x48) */
+/* Step 1: Digital clock enable + analog power-up (ADDR_MAIN = 0x48)
+ *
+ * Sequence matches espressif/esp_lcd_lt8912b official component (esp-bsp repo).
+ * Key differences from Linux kernel upstream:
+ *   - 0x02=0xF7 LVDS PLL reset pulse first (before clock enable)
+ *   - Tx Analog: 0xE1/0xE1/0x0C (higher drive for >= 530 Mbps)
+ *   - 0x33 is Tx Analog, NOT the HDMI output enable. HDMI output is
+ *     enabled separately at the end of init by writing 0x33=0x0E.
+ */
 static esp_err_t lt8912b_write_init_config(void)
 {
     i2c_master_dev_handle_t m = s_lt.dev_main;
     esp_err_t ret = ESP_OK;
+
+    /* LVDS PLL reset pulse — must be first (Espressif official driver) */
+    ESP_RETURN_ON_ERROR(lt_write(m, 0x02, 0xF7), TAG, "init 0x02 pll_rst");
+    ESP_RETURN_ON_ERROR(lt_write(m, 0x02, 0xFF), TAG, "init 0x02 pll_rel");
 
     /* Digital clock enable */
     ESP_RETURN_ON_ERROR(lt_write(m, 0x08, 0xFF), TAG, "init 0x08");
@@ -110,12 +122,10 @@ static esp_err_t lt8912b_write_init_config(void)
     ESP_RETURN_ON_ERROR(lt_write(m, 0x0A, 0xFF), TAG, "init 0x0A");
     ESP_RETURN_ON_ERROR(lt_write(m, 0x0B, 0x7C), TAG, "init 0x0B");
     ESP_RETURN_ON_ERROR(lt_write(m, 0x0C, 0xFF), TAG, "init 0x0C");
-    ESP_RETURN_ON_ERROR(lt_write(m, 0x42, 0x04), TAG, "init 0x42");
 
-    /* Tx Analog — BSP values (0xE1/0xE1/0x0C) for lane >= 530 Mbps.
-     * Linux kernel uses 0xB1/0xB1/0x0E (lower drive strength), which loses
-     * TMDS signal above ~530 Mbps.  Olimex BSP uses these higher values
-     * and they are required for 896 Mbps (1024x768@60Hz). */
+    /* Tx Analog — high drive for >= 530 Mbps lane rate.
+     * NOTE: 0x33 here is Tx drive strength, NOT the HDMI output enable.
+     * HDMI output is enabled at end of init by writing 0x33=0x0E. */
     ESP_RETURN_ON_ERROR(lt_write(m, 0x31, 0xE1), TAG, "init 0x31");
     ESP_RETURN_ON_ERROR(lt_write(m, 0x32, 0xE1), TAG, "init 0x32");
     ESP_RETURN_ON_ERROR(lt_write(m, 0x33, 0x0C), TAG, "init 0x33");
@@ -138,9 +148,6 @@ static esp_err_t lt8912b_write_init_config(void)
     ESP_RETURN_ON_ERROR(lt_write(m, 0x3E, 0xD6), TAG, "init 0x3E");
     ESP_RETURN_ON_ERROR(lt_write(m, 0x3F, 0xD4), TAG, "init 0x3F");
     ESP_RETURN_ON_ERROR(lt_write(m, 0x41, 0x3C), TAG, "init 0x41");
-
-    /* Output mode: 0=DVI, 1=HDMI — written again in lvds_config but set early */
-    ESP_RETURN_ON_ERROR(lt_write(m, 0xB2, 0x00), TAG, "init 0xB2");
 
     return ret;
 }
@@ -293,18 +300,24 @@ static esp_err_t lt8912b_write_dds_config(void)
     return ESP_OK;
 }
 
-/* Step 5: MIPI RX logic reset pulse (ADDR_MAIN = 0x48)
+/* Step 5: MIPI RX logic reset + DDS reset (ADDR_MAIN = 0x48)
  *
  * Must be done AFTER all video timing registers are written.
- * Requires a 10-20 ms hold time with 0x03=0x7F before releasing.
+ * Espressif official driver also pulses 0x05 (DDS reset) after 0x03 (MIPI RX reset).
  */
 static esp_err_t lt8912b_write_rxlogicres(void)
 {
     i2c_master_dev_handle_t m = s_lt.dev_main;
 
+    /* MIPI RX reset */
     ESP_RETURN_ON_ERROR(lt_write(m, 0x03, 0x7F), TAG, "rxres hold");
     vTaskDelay(pdMS_TO_TICKS(10));
     ESP_RETURN_ON_ERROR(lt_write(m, 0x03, 0xFF), TAG, "rxres release");
+
+    /* DDS reset (Espressif official driver) */
+    ESP_RETURN_ON_ERROR(lt_write(m, 0x05, 0xFB), TAG, "dds_rst hold");
+    vTaskDelay(pdMS_TO_TICKS(10));
+    ESP_RETURN_ON_ERROR(lt_write(m, 0x05, 0xFF), TAG, "dds_rst release");
 
     return ESP_OK;
 }
@@ -405,11 +418,18 @@ static esp_err_t lt8912b_init_common(int hpd_gpio)
     /* --- Program chip registers --- */
     ESP_GOTO_ON_ERROR(lt8912b_write_init_config(),  err_devs, TAG, "init_config");
     ESP_GOTO_ON_ERROR(lt8912b_write_mipi_basic(),   err_devs, TAG, "mipi_basic");
-    ESP_GOTO_ON_ERROR(lt8912b_write_video_timing(), err_devs, TAG, "video_timing");
     ESP_GOTO_ON_ERROR(lt8912b_write_dds_config(),   err_devs, TAG, "dds_config");
+    ESP_GOTO_ON_ERROR(lt8912b_write_video_timing(), err_devs, TAG, "video_timing");
     ESP_GOTO_ON_ERROR(lt8912b_write_rxlogicres(),   err_devs, TAG, "rxlogicres");
     ESP_GOTO_ON_ERROR(lt8912b_write_lvds_config(true /* HDMI */),
                                                     err_devs, TAG, "lvds_config");
+
+    /* HDMI output enable: 0x33=0x0E (Espressif official driver).
+     * NOTE: 0x33 is dual-use — as Tx Analog drive strength (0x0C) during init,
+     * then overwritten here to enable HDMI output (0x0C=off, 0x0E=on).
+     * Without this write the TMDS output stays disabled. */
+    ESP_GOTO_ON_ERROR(lt_write(s_lt.dev_main, 0x33, 0x0E),
+                                                    err_devs, TAG, "hdmi_out_en");
 
     /* --- HPD GPIO --- */
     s_lt.hpd_gpio = hpd_gpio;
