@@ -81,12 +81,12 @@ static const char *TAG = "vdp_int";
 /* ------------------------------------------------------------------ */
 /* Screen geometry                                                      */
 /* ------------------------------------------------------------------ */
-#define FB_W            800
-#define FB_H            600
+#define FB_W            1024
+#define FB_H            768
 #define FONT_W          8
 #define FONT_H          8
 #define BYTES_PER_PIX   3                     /* RGB888 */
-#define FB_SIZE         (FB_W * FB_H * BYTES_PER_PIX)  /* 2359296 (~2.25 MB) */
+#define FB_SIZE         (FB_W * FB_H * BYTES_PER_PIX)  /* 2359296 (~2.25 MB) → 1024×768×3 = 2359296 */
 
 static int     s_mode_w      = 640;
 static int     s_mode_h      = 480;

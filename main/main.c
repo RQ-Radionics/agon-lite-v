@@ -172,28 +172,28 @@ static esp_lcd_panel_handle_t hdmi_init(void)
     ESP_LOGI(TAG, "HDMI: step 3 OK");
 
     /* 4. Create DPI panel — feeds pixel data from ESP32-P4 to LT8912B DSI input.
-     * 800x600 @ 40 MHz pixel clock, RGB888 (24-bit).
-     *    VESA 800x600@60Hz timings:
-     *      htotal=1056 (hfp=40 hs=128 hbp=88), vtotal=628 (vfp=1 vs=4 vbp=23)
-     *      h_polarity=positive, v_polarity=positive
+     * 1024x768 @ 56 MHz pixel clock, RGB888 (24-bit).
+     *    Olimex BSP reduced-blanking 1024x768@60Hz timings:
+     *      htotal=1184 (hfp=48 hs=32 hbp=80), vtotal=790 (vfp=3 vs=4 vbp=15)
+     *      h_polarity=positive, v_polarity=negative
      *    num_fbs=2: double-buffered so mos_vdp_internal can render to back buffer
      *               while the DMA controller reads the front buffer.
      *    disable_lp=1: stay in HS mode during blanking (required for video mode). */
     esp_lcd_panel_handle_t panel = NULL;
     esp_lcd_dpi_panel_config_t dpi_cfg = {
         .dpi_clk_src         = MIPI_DSI_DPI_CLK_SRC_DEFAULT,
-        .dpi_clock_freq_mhz  = 40,          /* 40 MHz for 800x600@60Hz */
+        .dpi_clock_freq_mhz  = 56,          /* 56 MHz for 1024x768@60Hz */
         .pixel_format        = LCD_COLOR_PIXEL_FORMAT_RGB888,
         .num_fbs             = 2,           /* double-buffered for tear-free rendering */
         .video_timing = {
-            .h_size          = 800,
-            .v_size          = 600,
-            .hsync_pulse_width = 128,
-            .hsync_back_porch  = 88,
-            .hsync_front_porch = 40,
+            .h_size          = 1024,
+            .v_size          = 768,
+            .hsync_pulse_width = 32,
+            .hsync_back_porch  = 80,
+            .hsync_front_porch = 48,
             .vsync_pulse_width = 4,
-            .vsync_back_porch  = 23,
-            .vsync_front_porch = 1,
+            .vsync_back_porch  = 15,
+            .vsync_front_porch = 3,
         },
         .flags.disable_lp    = 1,
     };
