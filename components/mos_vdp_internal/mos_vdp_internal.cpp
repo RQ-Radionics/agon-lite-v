@@ -293,6 +293,13 @@ typedef struct {
     int16_t   x, y;           /* position in logical pixels */
     bool      visible;
     uint8_t   paint_mode;     /* 0=opaque, 1=transparent(alpha) */
+    /* Save-behind buffer — pixels under the sprite on the FB.
+     * Allocated lazily in PSRAM. save_valid=true means the buffer
+     * holds the background that was overwritten by the last blit. */
+    uint8_t  *save_buf;
+    int       save_x, save_y; /* physical FB coords of saved rect */
+    int       save_w, save_h; /* physical size of saved rect */
+    bool      save_valid;
 } sprite_t;
 
 static bitmap_t  s_bitmaps[BITMAP_MAX];
@@ -377,13 +384,78 @@ static void bitmap_draw_to_fb(uint8_t *fb, uint8_t id, int bx, int by, uint8_t p
     }
 }
 
-/* Render all active sprites onto fb (called before display flip) */
-static void __attribute__((unused)) sprites_render(uint8_t *fb)
+/* Forward declaration — fb_draw() is defined after framebuffer state */
+static inline uint8_t *fb_draw(void);
+
+/* Restore backgrounds of all visible sprites (reverse z-order).
+ * Call this before any drawing that must not be overwritten by sprites. */
+static void sprites_hide(void)
 {
+    uint8_t *fb = fb_draw();
+    if (!fb) return;
+    for (int i = (int)s_num_active_sprites - 1; i >= 0; i--) {
+        sprite_t *sp = &s_sprites[i];
+        if (!sp->save_valid) continue;
+        /* Restore saved background row by row */
+        for (int row = 0; row < sp->save_h; row++) {
+            uint8_t *dst = fb + ((sp->save_y + row) * FB_W + sp->save_x) * BYTES_PER_PIX;
+            const uint8_t *src = sp->save_buf + row * sp->save_w * BYTES_PER_PIX;
+            memcpy(dst, src, (size_t)sp->save_w * BYTES_PER_PIX);
+        }
+        sp->save_valid = false;
+    }
+}
+
+/* Save background and blit all visible sprites (forward z-order).
+ * Call this after drawing, just before cache_msync / display flip. */
+static void sprites_show(void)
+{
+    uint8_t *fb = fb_draw();
+    if (!fb) return;
     for (int i = 0; i < (int)s_num_active_sprites; i++) {
         sprite_t *sp = &s_sprites[i];
         if (!sp->visible || sp->num_frames == 0) continue;
+
         uint8_t bid = sp->frame_ids[sp->cur_frame];
+        if (!s_bitmaps[bid].data) continue;
+
+        /* Compute physical FB rect for this sprite */
+        int bw = s_bitmaps[bid].w;
+        int bh = s_bitmaps[bid].h;
+        /* Logical bounds clipped to graphics viewport */
+        int lx0 = sp->x < s_gvp_x0 ? s_gvp_x0 : sp->x;
+        int ly0 = sp->y < s_gvp_y0 ? s_gvp_y0 : sp->y;
+        int lx1 = sp->x + bw - 1; if (lx1 > s_gvp_x1) lx1 = s_gvp_x1;
+        int ly1 = sp->y + bh - 1; if (ly1 > s_gvp_y1) ly1 = s_gvp_y1;
+        if (lx0 > lx1 || ly0 > ly1) continue;
+        /* Physical bounds */
+        int px0 = lx0 * s_scale + s_off_x; if (px0 < 0) px0 = 0;
+        int py0 = ly0 * s_scale + s_off_y; if (py0 < 0) py0 = 0;
+        int px1 = (lx1 + 1) * s_scale - 1 + s_off_x; if (px1 >= FB_W) px1 = FB_W - 1;
+        int py1 = (ly1 + 1) * s_scale - 1 + s_off_y; if (py1 >= FB_H) py1 = FB_H - 1;
+        if (px0 > px1 || py0 > py1) continue;
+        int pw = px1 - px0 + 1;
+        int ph = py1 - py0 + 1;
+
+        /* Grow save_buf if needed */
+        size_t need = (size_t)pw * ph * BYTES_PER_PIX;
+        if (!sp->save_buf || sp->save_w * sp->save_h * BYTES_PER_PIX < (int)need) {
+            if (sp->save_buf) heap_caps_free(sp->save_buf);
+            sp->save_buf = (uint8_t *)heap_caps_malloc(need, MALLOC_CAP_SPIRAM);
+            if (!sp->save_buf) continue;
+        }
+
+        /* Save background */
+        for (int row = 0; row < ph; row++) {
+            const uint8_t *src = fb + ((py0 + row) * FB_W + px0) * BYTES_PER_PIX;
+            uint8_t *dst = sp->save_buf + row * pw * BYTES_PER_PIX;
+            memcpy(dst, src, (size_t)pw * BYTES_PER_PIX);
+        }
+        sp->save_x = px0; sp->save_y = py0;
+        sp->save_w = pw;  sp->save_h = ph;
+        sp->save_valid = true;
+
+        /* Blit sprite */
         bitmap_draw_to_fb(fb, bid, sp->x, sp->y, sp->paint_mode);
     }
 }
@@ -396,6 +468,13 @@ static void sprites_reset_all(void)
         s_sprites[i].visible     = false;
         s_sprites[i].x = s_sprites[i].y = 0;
         s_sprites[i].paint_mode  = 1; /* default: alpha-blend */
+        if (s_sprites[i].save_buf) {
+            heap_caps_free(s_sprites[i].save_buf);
+            s_sprites[i].save_buf = NULL;
+        }
+        s_sprites[i].save_valid = false;
+        s_sprites[i].save_w = 0;
+        s_sprites[i].save_h = 0;
     }
     s_num_active_sprites = 0;
     s_cur_sprite = 0;
@@ -1474,24 +1553,30 @@ static void vdp_render_task(void *arg)
         if (xQueueReceive(s_vdu_queue, &byte, pdMS_TO_TICKS(16)) == pdTRUE) {
             if (s_fb_mutex) xSemaphoreTake(s_fb_mutex, portMAX_DELAY);
             cursor_hide();   /* remove cursor before any VDU drawing */
+            sprites_hide();  /* restore sprite backgrounds before drawing */
             vdu_process(byte);
             /* Drain the queue fully before flushing — avoids a draw_bitmap
              * call per byte when thousands of PLOTs are in flight. */
             while (xQueueReceive(s_vdu_queue, &byte, 0) == pdTRUE) {
                 vdu_process(byte);
             }
+            sprites_show();  /* save backgrounds and blit sprites */
             cursor_show();   /* restore cursor when queue is empty */
             if (s_fb_mutex) xSemaphoreGive(s_fb_mutex);
         }
         /* Flush at ~60Hz from task context — safe for draw_bitmap / DMA */
         if (s_fb_dirty) {
             if (s_fb_mutex) xSemaphoreTake(s_fb_mutex, portMAX_DELAY);
+            cursor_hide();
+            sprites_hide();
             /* Cursor blink: toggle every ~38 frames (~640 ms at 60 Hz) */
             static int s_blink_ctr = 0;
             if (++s_blink_ctr >= 38) {
                 s_blink_ctr = 0;
-                cursor_blink_toggle();
+                s_cursor_blink_on = !s_cursor_blink_on;
             }
+            sprites_show();
+            cursor_show();
             fb_flush_now();
             if (s_fb_mutex) xSemaphoreGive(s_fb_mutex);
         }
