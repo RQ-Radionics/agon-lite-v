@@ -219,10 +219,9 @@ ample room in the 96KB remaining after init allocations.
 ### Design decision recorded: Agon video modes and HDMI output
 - Agon has 18 standard modes (plus extended/double-buffered variants)
 - Pixel clocks range from 12.5 MHz (320×200) to 65 MHz (1024×768)
-- **HDMI output is FIXED at 640×480@60Hz** for all Agon modes
-- Modes with lower resolution (320×240, 512×384, etc.) are rendered at native
-  resolution in PSRAM framebuffer and the MIPI DSI stream always outputs 640×480
-- High-res modes (800×600, 1024×768) are deferred — issue esp32-mos-agw
+- **HDMI output is FIXED at 1024×768@60Hz** for all Agon modes (session 8)
+- Modes with lower resolution rendered at native size, centered in 1024×768 FB
+- **DO NOT use XIP_FROM_PSRAM** — tested, causes blue screen / worse flicker
 
 ### SD-only storage — CRITICAL fix (commit d0f0073, session 5)
 
@@ -242,6 +241,25 @@ such restriction — it uses its own bus with no cache coherency dance.
 **Consequence for Waveshare board**: The Waveshare build also no longer has a flash
 FAT partition. All files must be on SD card. `flash_data.sh` no longer needs to
 flash the storage partition (only the firmware binary).
+
+### LT8912B HDMI driver — CRITICAL learnings (session 8, commit e663df9)
+
+**Root cause of "check video cable"**: reg `0x33` is dual-use:
+- Written `0x0C` as Tx Analog drive strength during init sequence
+- Must be written `0x0E` at the END of init to enable HDMI output
+- Without `0x0E`, TMDS output stays disabled permanently
+
+**Root cause of periodic sync loss / blue screen**: `hs=8` (133 ns) too narrow
+for LT8912B PLL to maintain lock. Must use VESA-proportioned hsync width.
+Final working timings (pclk=60 MHz, PLL_F240M/4 exact):
+- `htotal=1241 vtotal=806` → fps=59.985 Hz
+- `hfp=14 hs=83 hbp=120  vfp=3 vs=6 vbp=29`
+- DDS: `0x93/0x3E/0x29` (Espressif official esp_lcd_lt8912b component)
+- Settle: `0x08`
+- LVDS PLL reset pulse (`0x02=0xF7/0xFF`) must be FIRST before clock enable
+- DDS reset (`0x05=0xFB/0xFF`) must follow MIPI RX reset (`0x03`)
+
+**DO NOT use XIP_FROM_PSRAM** — causes blue screen flicker, worse than without.
 
 ### Next areas to work on
 - **`mos_vdp_internal`** — PLOT engine verificado y funcionando (hatgraph, mandelbrot, cube3d)
