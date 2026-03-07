@@ -1435,9 +1435,19 @@ typedef enum {
     /* VDU 23,n (UDG redefine, n=32..255) — collect 8 bitmap bytes */
     VDU_STATE_VDU23_UDG,
 
+    /* VDU 23,0,0x90 — VDP_UDG: char byte, then 8 data bytes (reuse UDG state) */
+    VDU_STATE_VDU23_0_UDG_CHAR,  /* waiting for the char code */
+
+    /* VDU 23,0,0x92 — VDP_MAP_CHAR_TO_BITMAP: char(1) + bitmapId(2) */
+    VDU_STATE_VDU23_0_92_CHAR,   /* char byte */
+    VDU_STATE_VDU23_0_92_ID0,    /* bitmapId lo */
+    VDU_STATE_VDU23_0_92_ID1,    /* bitmapId hi */
+
     /* VDU 23,27 — sprite/bitmap engine */
     VDU_STATE_VDU23_27_CMD,    /* sub-command byte */
     VDU_STATE_VDU23_27_0,      /* cmd 0: bitmap select (1 byte) */
+    VDU_STATE_VDU23_27_0x20_LO, /* cmd 0x20: bitmap select 16-bit — lo byte */
+    VDU_STATE_VDU23_27_0x20_HI, /* cmd 0x20: bitmap select 16-bit — hi byte */
     VDU_STATE_VDU23_27_1_W0,   /* cmd 1: create bitmap from stream — w lo */
     VDU_STATE_VDU23_27_1_W1,   /* w hi */
     VDU_STATE_VDU23_27_1_H0,   /* h lo */
@@ -2010,16 +2020,16 @@ static void vdu_process(uint8_t c)
         case 0x8C: /* VDP_CURSOR_MOVE (4 bytes: dx lo/hi, dy lo/hi) */
             s_vdu_skip = 4; s_vdu_state = VDU_STATE_VDU23_0_SKIP;
             break;
-        case 0x90: /* VDP_UDG — redefine char in display font (skip 9 bytes) */
-            s_vdu_skip = 9; s_vdu_state = VDU_STATE_VDU23_0_SKIP;
+        case 0x90: /* VDP_UDG — redefine char: 1 char byte + 8 data bytes */
+            s_vdu_state = VDU_STATE_VDU23_0_UDG_CHAR;
             break;
         case 0x91: /* VDP_UDG_RESET — reset all UDGs (ignored in teletext mode) */
             if (!s_ttxt_mode)
                 udg_reset_all();
             s_vdu_state = VDU_STATE_NORMAL;
             break;
-        case 0x92: /* VDP_MAP_CHAR_TO_BITMAP (skip 5 bytes) */
-            s_vdu_skip = 5; s_vdu_state = VDU_STATE_VDU23_0_SKIP;
+        case 0x92: /* VDP_MAP_CHAR_TO_BITMAP: char(1) + bitmapId lo,hi(2) */
+            s_vdu_state = VDU_STATE_VDU23_0_92_CHAR;
             break;
         case 0x93: /* VDP_SCRCHAR_GRAPHICS (skip 4 bytes) */
             s_vdu_skip = 4; s_vdu_state = VDU_STATE_VDU23_0_SKIP;
@@ -2171,14 +2181,38 @@ static void vdu_process(uint8_t c)
 
     /* ---- VDU 23,n — UDG redefine (8 bytes) ---- */
     case VDU_STATE_VDU23_UDG:
-        if (s_udg) {
+        if (s_udg && s_udg_char >= 32) {
             s_udg[s_udg_char - 32][s_arg_idx] = c;
         }
         s_arg_idx++;
         if (s_arg_idx >= 8) {
-            if (s_udg) udg_set_defined(s_udg_char);
+            if (s_udg && s_udg_char >= 32) udg_set_defined(s_udg_char);
             s_vdu_state = VDU_STATE_NORMAL;
         }
+        break;
+
+    /* VDU 23,0,0x90 — VDP_UDG: char byte then 8 data bytes (any char 0-255) */
+    case VDU_STATE_VDU23_0_UDG_CHAR:
+        s_udg_char = c;
+        s_arg_idx = 0;
+        s_vdu_state = VDU_STATE_VDU23_UDG;
+        break;
+
+    /* VDU 23,0,0x92 — VDP_MAP_CHAR_TO_BITMAP: char, bitmapId lo, bitmapId hi */
+    case VDU_STATE_VDU23_0_92_CHAR:
+        s_arg[0] = c;   /* char to remap */
+        s_vdu_state = VDU_STATE_VDU23_0_92_ID0;
+        break;
+    case VDU_STATE_VDU23_0_92_ID0:
+        s_arg[1] = c;   /* bitmapId lo */
+        s_vdu_state = VDU_STATE_VDU23_0_92_ID1;
+        break;
+    case VDU_STATE_VDU23_0_92_ID1:
+        /* bitmapId hi — command complete, consume silently for now */
+        /* (char-to-bitmap mapping not yet implemented — bytes correctly consumed) */
+        ESP_LOGD(TAG, "map_char_to_bitmap: char=%d bitmapId=%d (not implemented)",
+                 s_arg[0], s_arg[1] | (c << 8));
+        s_vdu_state = VDU_STATE_NORMAL;
         break;
 
     /* ================================================================
@@ -2250,8 +2284,8 @@ static void vdu_process(uint8_t c)
             s_vdu_state = VDU_STATE_NORMAL;
             break;
         case 21:   s_vdu_state = VDU_STATE_VDU23_27_21;     break; /* replace frame */
-        case 0x20: /* select bitmap 16-bit — reuse s_arg, next byte is lo */
-            s_vdu_state = VDU_STATE_VDU23_27_0;  /* 1-byte (lo); hi ignored */
+        case 0x20: /* select bitmap 16-bit — read 2-byte word */
+            s_vdu_state = VDU_STATE_VDU23_27_0x20_LO;
             break;
         default:
             /* Unknown — skip 4 bytes (safe minimum for any 2-word args) */
@@ -2265,6 +2299,17 @@ static void vdu_process(uint8_t c)
     case VDU_STATE_VDU23_27_0:
         s_cur_bitmap = c;
         ESP_LOGD(TAG, "spr: bitmap %d selected", s_cur_bitmap);
+        s_vdu_state = VDU_STATE_NORMAL;
+        break;
+
+    /* cmd 0x20: select bitmap by 16-bit raw buffer ID (lo byte first) */
+    case VDU_STATE_VDU23_27_0x20_LO:
+        s_arg[0] = c;
+        s_vdu_state = VDU_STATE_VDU23_27_0x20_HI;
+        break;
+    case VDU_STATE_VDU23_27_0x20_HI:
+        s_cur_bitmap = (uint8_t)(s_arg[0] | (c << 8)); /* truncate to 8-bit for our table */
+        ESP_LOGD(TAG, "spr: bitmap %d selected (16-bit id)", s_cur_bitmap);
         s_vdu_state = VDU_STATE_NORMAL;
         break;
 
