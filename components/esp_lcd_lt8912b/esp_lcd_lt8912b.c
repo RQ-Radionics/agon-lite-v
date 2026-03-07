@@ -569,15 +569,20 @@ esp_err_t esp_lcd_lt8912b_post_dpi_enable(void)
 
     i2c_master_dev_handle_t m = s_lt.dev_main;
 
-    /* Read diagnostic registers — tells us if DSI data is arriving.
-     * Non-zero values mean the LT8912B is seeing MIPI sync pulses. */
+    /* Read diagnostic registers to confirm DSI is active.
+     * Non-zero = LT8912B is seeing MIPI sync pulses from DPI.
+     * 0xFFFF = counter saturated = chip is locked and running fine.
+     * Do NOT re-trigger rxlogicres here — the chip already locked during
+     * init (DSI starts before post_dpi_enable is called) and a second
+     * rxlogicres pulse causes a brief video dropout (visible flicker). */
     uint8_t hs_l = 0, hs_h = 0, vs_l = 0, vs_h = 0;
     lt_read(s_lt.dev_main, 0x9C, &hs_l);
     lt_read(s_lt.dev_main, 0x9D, &hs_h);
     lt_read(s_lt.dev_main, 0x9E, &vs_l);
     lt_read(s_lt.dev_main, 0x9F, &vs_h);
-    ESP_LOGI(TAG, "MIPI sync detect: Hsync=0x%02X%02X Vsync=0x%02X%02X (non-zero = DSI active)",
-             hs_h, hs_l, vs_h, vs_l);
+    ESP_LOGI(TAG, "MIPI sync: Hsync=0x%02X%02X Vsync=0x%02X%02X%s",
+             hs_h, hs_l, vs_h, vs_l,
+             (hs_l || hs_h || vs_l || vs_h) ? " — DSI locked" : " — NO DSI SIGNAL");
 
     /* Re-trigger MIPI RX reset now that DSI is live */
     ESP_RETURN_ON_ERROR(lt_write(m, 0x03, 0x7F), TAG, "post rxres hold");
