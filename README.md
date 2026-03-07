@@ -98,11 +98,12 @@ The board reads this at boot, connects to Wi-Fi (Waveshare) or uses Ethernet (Ol
 
 The USB HID keyboard driver currently works with:
 
-- ✅ **High Speed (HS) keyboards** — any keyboard that operates at USB 2.0 High Speed (480 Mbps), connected directly or via the onboard hub
+- ✅ **High Speed (HS) keyboards** — any keyboard operating at USB 2.0 High Speed (480 Mbps)
+- ✅ **Full Speed (FS) keyboards** — 12 Mbps, covers most modern USB keyboards
 - ✅ **2.4 GHz wireless USB receivers** — most wireless keyboard dongles work correctly
-- ❌ **Standard wired USB keyboards** — most cheap wired keyboards are Low Speed (1.5 Mbps) or Full Speed (12 Mbps) and require SPLIT transactions through the hub's Transaction Translator (TT), which are not yet implemented in ESP-IDF's USB host stack
+- ❌ **Low Speed (LS) keyboards** — 1.5 Mbps (older or very cheap wired keyboards) require SPLIT transactions through the hub's Transaction Translator (TT), which are not yet implemented in ESP-IDF's USB host stack
 
-**In practice**: a gaming keyboard, or any keyboard marked "USB 2.0 High Speed", will work reliably. Most wireless keyboards with a USB dongle also work. If your keyboard does not respond, try a different model.
+**In practice**: the vast majority of keyboards work. If yours does not respond, it is likely a Low Speed device — try a different keyboard.
 
 See [GitHub issue #1](../../issues/1) for the technical background and the plan to add LS/FS support.
 
