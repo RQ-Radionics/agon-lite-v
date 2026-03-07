@@ -571,6 +571,10 @@ static int  s_vp_right = 79, s_vp_bottom = 59;
 /* Cursor state                                                         */
 /* ------------------------------------------------------------------ */
 static bool s_cursor_visible = true;   /* VDU 23,1 — user enable/disable */
+static uint8_t s_cursor_behaviour = 0; /* VDU 23,16 — behaviour flags */
+/* Bit 0 (scrollProtect): when set, cursor stops at last cell instead of scrolling.
+ * Bit 1 (invertH), bit 2 (invertV), bit 3 (flipXY), bit 4 (yWrap): not yet used. */
+#define CURSOR_SCROLL_PROTECT  0x01
 static bool s_cursor_shown   = false;  /* true = XOR block currently on FB */
 static bool s_cursor_blink_on = true;  /* current blink phase (true = show) */
 
@@ -882,6 +886,11 @@ static void cursor_advance(void)
 {
     s_col++;
     if (s_col > s_vp_right) {
+        if (s_cursor_behaviour & CURSOR_SCROLL_PROTECT) {
+            /* scrollProtect: stay on last cell, do not wrap or scroll */
+            s_col = s_vp_right;
+            return;
+        }
         s_col = s_vp_left;
         s_row++;
         if (s_row > s_vp_bottom) {
@@ -895,6 +904,11 @@ static void newline(void)
 {
     s_row++;
     if (s_row > s_vp_bottom) {
+        if (s_cursor_behaviour & CURSOR_SCROLL_PROTECT) {
+            /* scrollProtect: stay on last row, do not scroll */
+            s_row = s_vp_bottom;
+            return;
+        }
         scroll_up();
         s_row = s_vp_bottom;
     }
@@ -2172,10 +2186,12 @@ static void vdu_process(uint8_t c)
         s_vdu_state = VDU_STATE_NORMAL;
         break;
 
-    /* ---- VDU 23,16 — cursor behaviour (2 bytes, ignore) ---- */
+    /* ---- VDU 23,16 — cursor behaviour: setting, mask ---- */
     case VDU_STATE_VDU23_16_1: s_arg[1] = c; s_vdu_state = VDU_STATE_VDU23_16_2; break;
     case VDU_STATE_VDU23_16_2:
-        /* setting=arg[1], mask=c — ignore for now */
+        /* formula: cursorBehaviour = (cursorBehaviour & mask) ^ setting */
+        s_cursor_behaviour = (s_cursor_behaviour & c) ^ s_arg[1];
+        ESP_LOGD(TAG, "cursor behaviour: 0x%02x", s_cursor_behaviour);
         s_vdu_state = VDU_STATE_NORMAL;
         break;
 
@@ -2753,8 +2769,9 @@ esp_err_t mos_vdp_internal_init(esp_lcd_panel_handle_t dpi_panel)
     s_gfx_x_prev2 = 0; s_gfx_y_prev2 = 0;
     s_col = 0; s_row = 0;
     s_vdu_state = VDU_STATE_NORMAL;
-    s_cursor_visible = true;
-    s_cursor_shown   = false;   /* FB was just cleared — no XOR on screen */
+    s_cursor_visible  = true;
+    s_cursor_behaviour = 0;
+    s_cursor_shown    = false;   /* FB was just cleared — no XOR on screen */
     s_cursor_blink_on = true;
     s_kbd = {false, false, false, false, false, false, false};
     udg_reset_all();
