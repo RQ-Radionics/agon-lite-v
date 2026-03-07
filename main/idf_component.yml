@@ -1,7 +1,4 @@
 dependencies:
-  # Audio codec abstraction layer — used by mos_audio (ES8311 on Olimex ESP32-P4-PC)
-  espressif/esp_codec_dev: "^1.5.4"
-
   # WiFi via ESP32-C6 coprocessor (ESP-Hosted over SDIO)
   # Only pulled in on targets without native WiFi radio
   espressif/esp_wifi_remote:
