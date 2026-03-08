@@ -115,6 +115,16 @@ void mos_vdp_router_request_mode(void)
         mos_vdp_request_mode();
 }
 
+void mos_vdp_router_read_pixel(int x, int y,
+                                uint8_t *r, uint8_t *g, uint8_t *b,
+                                uint8_t *index)
+{
+    if (use_internal())
+        mos_vdp_internal_read_pixel(x, y, r, g, b, index);
+    else
+        mos_vdp_read_pixel(x, y, r, g, b, index);
+}
+
 #else   /* TCP-only path — no internal VDP compiled in */
 
 t_mos_sysvars *mos_vdp_router_get_sysvars(void)
@@ -130,5 +140,11 @@ bool mos_vdp_router_kbhit(void)          { return mos_vdp_kbhit(); }
 void mos_vdp_router_flush(void)          { mos_vdp_flush(); }
 void mos_vdp_router_sync(void)           { mos_vdp_sync(); }
 void mos_vdp_router_request_mode(void)   { mos_vdp_request_mode(); }
+void mos_vdp_router_read_pixel(int x, int y,
+                                uint8_t *r, uint8_t *g, uint8_t *b,
+                                uint8_t *index)
+{
+    mos_vdp_read_pixel(x, y, r, g, b, index);
+}
 
 #endif  /* CONFIG_MOS_VDP_INTERNAL_ENABLED */

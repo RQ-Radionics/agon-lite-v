@@ -1485,6 +1485,22 @@ static void send_scrpixel(int x, int y)
     vdp_send_byte(0);  /* palette index — not tracked */
 }
 
+/* Public pixel-read used by mos_vdp_router for POINT() — no round-trip needed */
+void mos_vdp_internal_read_pixel(int x, int y,
+                                  uint8_t *r, uint8_t *g, uint8_t *b,
+                                  uint8_t *index)
+{
+    int sy = agon_to_screen_y(y);
+    rgb888_t c = {0,0,0};
+    if ((unsigned)x < (unsigned)s_mode_w && (unsigned)sy < (unsigned)s_mode_h && s_fb[0]) {
+        c = fb_read_pixel_raw(s_off_x + x*s_scale, s_off_y + sy*s_scale);
+    }
+    *r     = c.r;
+    *g     = c.g;
+    *b     = c.b;
+    *index = 0;  /* palette index tracking not implemented */
+}
+
 /* ------------------------------------------------------------------ */
 /* VDU command state machine                                            */
 /* ------------------------------------------------------------------ */

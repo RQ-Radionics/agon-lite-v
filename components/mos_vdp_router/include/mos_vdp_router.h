@@ -86,3 +86,15 @@ void mos_vdp_router_request_mode(void);
  * For internal VDP: returns the internal sysvar block.
  */
 t_mos_sysvars *mos_vdp_router_get_sysvars(void);
+
+/**
+ * Read the colour of a pixel at logical coordinate (x, y).
+ *
+ * For the internal VDP, reads directly from the framebuffer (no round-trip).
+ * For the TCP VDP, sends VDU 23,0,&84 and waits up to 200 ms for the reply.
+ * Fills *r, *g, *b with the RGB888 colour and *index with the palette index.
+ * On failure (timeout or no VDP), all values are set to 0.
+ */
+void mos_vdp_router_read_pixel(int x, int y,
+                                uint8_t *r, uint8_t *g, uint8_t *b,
+                                uint8_t *index);

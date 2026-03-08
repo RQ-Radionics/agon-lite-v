@@ -127,4 +127,15 @@ void mos_vdp_sync(void);
  */
 void mos_vdp_request_mode(void);
 
+/*
+ * mos_vdp_read_pixel — read the colour of a pixel at logical (x, y).
+ *
+ * Sends VDU 23,0,&84,xlo,xhi,ylo,yhi and blocks until the VDP replies
+ * with a SCRPIXEL packet (timeout 200 ms).  On success, r, g, b are set
+ * to the RGB888 colour and index to the palette index.  On timeout all
+ * four values are set to 0.
+ */
+void mos_vdp_read_pixel(int x, int y,
+                         uint8_t *r, uint8_t *g, uint8_t *b, uint8_t *index);
+
 #endif /* MOS_VDP_H */

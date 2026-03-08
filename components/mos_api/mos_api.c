@@ -488,6 +488,22 @@ static void register_vdp_sysvars(void)
     createOrUpdateSystemVariable("VDP$Height",  MOS_VAR_CODE, &s_vdp_cv_height);
 }
 
+/* Logical OS-unit dimensions (BBC Micro / Agon standard) */
+#define LOGICAL_SCRW 1280
+#define LOGICAL_SCRH 1024
+
+static int mos_api_read_pixel(int x, int y,
+                               uint8_t *r, uint8_t *g, uint8_t *b,
+                               uint8_t *index)
+{
+    /* Convert OS units to mode pixels using current screen dimensions */
+    t_mos_sysvars *sv = mos_vdp_router_get_sysvars();
+    int pw = (sv && sv->scrWidth)  ? (int)((long)x * sv->scrWidth  / LOGICAL_SCRW) : x;
+    int ph = (sv && sv->scrHeight) ? (int)((long)y * sv->scrHeight / LOGICAL_SCRH) : y;
+    mos_vdp_router_read_pixel(pw, ph, r, g, b, index);
+    return (int)*index;
+}
+
 void mos_api_table_init(void)
 {
     t_mos_api *t = &s_mos_api_table;
@@ -555,6 +571,8 @@ void mos_api_table_init(void)
     t->vdp_request_mode = mos_vdp_router_request_mode;
 
     t->exit         = NULL;  /* registered later via mos_api_set_exit_fn() */
+
+    t->read_pixel   = mos_api_read_pixel;
 
     register_vdp_sysvars();
 }

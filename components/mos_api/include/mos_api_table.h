@@ -138,6 +138,18 @@ typedef struct {
      * User programs should call this instead of exit() / _exit(). */
     void     (*exit)(int status);
 
+    /* --- pixel read (POINT) --- */
+    /* Read the colour of a pixel at logical OS-unit coordinate (x, y).
+     * Converts OS units to mode pixels and queries the active VDP backend.
+     * For internal VDP: reads directly from framebuffer (no round-trip).
+     * For TCP VDP: sends VDU 23,0,&84 and waits up to 200 ms.
+     * Fills *r, *g, *b with RGB888 colour and *index with palette index.
+     * On failure, all outputs are set to 0.
+     * Returns scrpixelIndex (palette index), or -1 on failure/no VDP. */
+    int      (*read_pixel)(int x, int y,
+                           uint8_t *r, uint8_t *g, uint8_t *b,
+                           uint8_t *index);
+
 } t_mos_api;
 
 #endif /* MOS_API_TABLE_H */

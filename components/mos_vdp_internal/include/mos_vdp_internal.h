@@ -133,6 +133,20 @@ void mos_vdp_internal_flush(void);
 void mos_vdp_internal_set_response_cb(void (*cb)(uint8_t));
 
 /*
+ * mos_vdp_internal_read_pixel — read the colour of one pixel.
+ *
+ * Reads the physical framebuffer at logical coordinate (x, y) using the
+ * same coordinate mapping as VDU 23,0,&84.  Fills *r, *g, *b with the
+ * RGB888 colour and *index with the palette index (always 0 — palette
+ * tracking is not implemented).
+ *
+ * Can be called from any task. Returns immediately (no round-trip needed).
+ */
+void mos_vdp_internal_read_pixel(int x, int y,
+                                  uint8_t *r, uint8_t *g, uint8_t *b,
+                                  uint8_t *index);
+
+/*
  * mos_vdp_internal_get_sysvars — return a pointer to the live sysvar block.
  *
  * The returned block is updated in-place by the VDP render task whenever the
@@ -165,6 +179,7 @@ static inline void mos_vdp_internal_send_scancode(uint8_t b) { (void)b; }
 static inline bool mos_vdp_internal_connected(void) { return false; }
 static inline void mos_vdp_internal_flush(void) {}
 static inline void mos_vdp_internal_set_response_cb(void (*cb)(uint8_t)) { (void)cb; }
+static inline void mos_vdp_internal_read_pixel(int x, int y, uint8_t *r, uint8_t *g, uint8_t *b, uint8_t *index) { (void)x;(void)y; *r=*g=*b=*index=0; }
 static inline void *mos_vdp_internal_get_sysvars(void) { return NULL; }
 static inline void mos_vdp_internal_pause(void) {}
 static inline void mos_vdp_internal_resume(void) {}

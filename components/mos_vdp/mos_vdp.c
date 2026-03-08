@@ -85,6 +85,9 @@ static volatile uint8_t  s_gp_echo = 0;
 /* Binary semaphore signalled by proto_feed when a PACKET_MODE arrives */
 static SemaphoreHandle_t s_mode_sem = NULL;
 
+/* Binary semaphore signalled by proto_feed when a SCRPIXEL packet arrives */
+static SemaphoreHandle_t s_pixel_sem = NULL;
+
 /* TX write buffer — coalesces single-byte putch() calls */
 #define VDP_TX_BUF_SIZE  256
 static uint8_t  s_tx_buf[VDP_TX_BUF_SIZE];
@@ -210,6 +213,7 @@ static bool proto_feed(vdp_proto_t *p, uint8_t byte, uint8_t *out_ascii)
                 s_sysvars.scrpixel[2]  = p->data[2]; /* B */
                 s_sysvars.scrpixelIndex = p->data[3];
                 s_sysvars.vpd_pflags |= 0x04; /* vdp_pflag_point */
+                if (s_pixel_sem) xSemaphoreGive(s_pixel_sem);
             } else if (p->cmd == VDP_CMD_AUDIO && p->len >= 1) {
                 /* Audio channel done */
                 s_sysvars.audioChannel = p->data[0];
@@ -456,6 +460,12 @@ int mos_vdp_init(void)
         return -1;
     }
 
+    s_pixel_sem = xSemaphoreCreateBinary();
+    if (!s_pixel_sem) {
+        ESP_LOGE(TAG, "PIXEL semaphore alloc failed");
+        return -1;
+    }
+
     BaseType_t ret = xTaskCreate(vdp_server_task, "vdp_srv",
                                  VDP_TASK_STACK_SZ, NULL,
                                  VDP_TASK_PRIO, NULL);
@@ -613,4 +623,42 @@ void mos_vdp_request_mode(void)
 
     /* Wait for PACKET_MODE — timeout 200 ms */
     xSemaphoreTake(s_mode_sem, pdMS_TO_TICKS(200));
+}
+
+void mos_vdp_read_pixel(int x, int y,
+                         uint8_t *r, uint8_t *g, uint8_t *b, uint8_t *index)
+{
+    *r = *g = *b = *index = 0;
+
+    if (!s_connected || !s_pixel_sem) {
+        vTaskDelay(pdMS_TO_TICKS(20));
+        return;
+    }
+
+    mos_vdp_flush();
+
+    /* Drain any stale PIXEL signal from a previous call */
+    xSemaphoreTake(s_pixel_sem, 0);
+
+    /* Send VDU 23,0,0x84,xlo,xhi,ylo,yhi — VDP responds with SCRPIXEL packet */
+    uint8_t pkt[7] = {
+        0x17, 0x00, 0x84,
+        (uint8_t)(x & 0xFF), (uint8_t)((x >> 8) & 0xFF),
+        (uint8_t)(y & 0xFF), (uint8_t)((y >> 8) & 0xFF)
+    };
+    xSemaphoreTake(s_sock_mu, portMAX_DELAY);
+    int fd = s_client_fd;
+    xSemaphoreGive(s_sock_mu);
+
+    if (fd >= 0) {
+        send(fd, pkt, sizeof(pkt), 0);
+    }
+
+    /* Wait for SCRPIXEL response — timeout 200 ms */
+    if (xSemaphoreTake(s_pixel_sem, pdMS_TO_TICKS(200)) == pdTRUE) {
+        *r     = s_sysvars.scrpixel[0];
+        *g     = s_sysvars.scrpixel[1];
+        *b     = s_sysvars.scrpixel[2];
+        *index = s_sysvars.scrpixelIndex;
+    }
 }
