@@ -29,9 +29,10 @@ bool mos_net_is_connected(void);
 const char *mos_net_ip(void);
 
 /**
- * Returns the POSIX TZ string configured for this network interface
- * (e.g. from wifi.cfg tz= line), or NULL if not set (defaults to UTC0).
- * Pass the result directly to mos_sntp_init().
+ * Returns the POSIX TZ string from /sdcard/tz.cfg (single line), or NULL
+ * if the file is absent (mos_sntp_init will default to UTC0).
+ * Example tz.cfg content:  CET-1CEST,M3.5.0,M10.5.0/3
+ * Works for all network backends (WiFi and Ethernet).
  */
 const char *mos_net_get_tz(void);
 

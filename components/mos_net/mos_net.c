@@ -5,13 +5,42 @@
  *   MOS_NET_WIFI     → mos_wifi (WiFi via C6 coprocessor over SDIO)
  *   MOS_NET_ETHERNET → EMAC + IP101GRR PHY (RMII, external clock)
  *   MOS_NET_NONE     → stubs, no-op
+ *
+ * Timezone: all backends read /sdcard/tz.cfg (single line, POSIX TZ string).
+ * Example:  CET-1CEST,M3.5.0,M10.5.0/3
  */
 
 #include "sdkconfig.h"
 #include "mos_net.h"
+#include "mos_fs.h"
 #include "esp_log.h"
+#include <stdio.h>
+#include <string.h>
 
 static const char *TAG = "mos_net";
+
+#define TZ_CFG_PATH  MOS_SD_MOUNT "/tz.cfg"
+
+static char s_tz[64] = {0};
+static bool s_tz_loaded = false;
+
+/* Read tz.cfg once; returns s_tz (empty string if absent). */
+static const char *load_tz(void)
+{
+    if (s_tz_loaded) return s_tz;
+    s_tz_loaded = true;
+    FILE *f = fopen(TZ_CFG_PATH, "r");
+    if (!f) return s_tz;   /* stays empty → caller uses UTC0 */
+    if (fgets(s_tz, sizeof(s_tz), f)) {
+        /* strip trailing newline/CR */
+        size_t len = strlen(s_tz);
+        while (len > 0 && (s_tz[len-1] == '\n' || s_tz[len-1] == '\r'))
+            s_tz[--len] = '\0';
+        ESP_LOGI(TAG, "Timezone from tz.cfg: '%s'", s_tz);
+    }
+    fclose(f);
+    return s_tz;
+}
 
 /* ================================================================== */
 /* Backend: WiFi                                                        */
@@ -38,7 +67,8 @@ const char *mos_net_ip(void)
 
 const char *mos_net_get_tz(void)
 {
-    return mos_wifi_get_tz();
+    const char *tz = load_tz();
+    return (tz[0] != '\0') ? tz : NULL;
 }
 
 /* ================================================================== */
@@ -209,7 +239,8 @@ const char *mos_net_ip(void)
 
 const char *mos_net_get_tz(void)
 {
-    return NULL;   /* Ethernet backend: no TZ config */
+    const char *tz = load_tz();
+    return (tz[0] != '\0') ? tz : NULL;
 }
 
 /* ================================================================== */

@@ -4,10 +4,10 @@
  * Credentials are read at boot from /sdcard/wifi.cfg (simple key=value format):
  *   ssid=MyNetwork
  *   password=MySecret
- *   tz=CET-1CEST,M3.5.0,M10.5.0/3   (optional — POSIX TZ string, default UTC0)
  *
  * If the file is absent or unreadable, falls back to wifi_credentials.h.
  * The 'wifi' shell command connects with new credentials and saves them.
+ * Timezone is configured separately in /sdcard/tz.cfg (see mos_net_get_tz()).
  */
 
 #include "sdkconfig.h"
