@@ -19,6 +19,7 @@
 #include <ctype.h>
 #include <sys/stat.h>
 #include <sys/dirent.h>
+#include <fnmatch.h>
 #include <unistd.h>
 #include <time.h>
 #include <sys/time.h>
@@ -465,22 +466,38 @@ static int do_DIR(const char *path_in, uint8_t flags)
     char resolved[MOS_PATH_MAX];
     mos_fs_resolve(path_in, resolved, sizeof(resolved));
 
-    DIR *d = opendir(resolved);
+    /* If the resolved path is not a directory, treat the last component
+     * as a wildcard/glob pattern and open its parent directory. */
+    const char *glob_pat = NULL;   /* NULL = show all */
+    char dir_path[MOS_PATH_MAX];
+    strncpy(dir_path, resolved, sizeof(dir_path) - 1);
+    dir_path[sizeof(dir_path) - 1] = '\0';
+
+    if (!mos_isDirectory(dir_path)) {
+        char *slash = strrchr(dir_path, '/');
+        if (slash) {
+            glob_pat = slash + 1;   /* points into dir_path after the '/' */
+            *slash   = '\0';        /* terminate at the parent dir */
+        }
+    }
+
+    DIR *d = opendir(dir_path);
     if (!d) {
-        mos_printf("DIR: cannot open '%s': %s\r\n", resolved, strerror(errno));
+        mos_printf("DIR: cannot open '%s': %s\r\n", dir_path, strerror(errno));
         return FR_NO_PATH;
     }
 
     if (!(flags & MOS_DIR_HIDE_VOLUME_INFO)) {
-        mos_printf("\r\nDirectory of %s\r\n\r\n", resolved);
+        mos_printf("\r\nDirectory of %s\r\n\r\n", dir_path);
     }
 
     struct dirent *entry;
     while ((entry = readdir(d)) != NULL) {
         if (entry->d_name[0] == '.' && !(flags & MOS_DIR_SHOW_HIDDEN)) continue;
+        if (glob_pat && fnmatch(glob_pat, entry->d_name, FNM_PERIOD) != 0) continue;
 
         char full[MOS_PATH_MAX + 256];
-        snprintf(full, sizeof(full), "%s/%s", resolved, entry->d_name);
+        snprintf(full, sizeof(full), "%s/%s", dir_path, entry->d_name);
         struct stat st;
         bool got_stat = (stat(full, &st) == 0);
 
@@ -618,7 +635,32 @@ static int cmd_COPY(char *ptr)
     mos_fs_resolve(src, rsrc, sizeof(rsrc));
     mos_fs_resolve(dst, rdst, sizeof(rdst));
 
-    /* If dst is a directory, copy into it with same filename */
+    bool has_glob = (strchr(rsrc, '*') || strchr(rsrc, '?'));
+    if (has_glob) {
+        /* dst must be a directory when using wildcards */
+        if (!mos_isDirectory(rdst)) {
+            mos_printf("COPY: destination must be a directory when using wildcards\r\n");
+            return FR_INVALID_PARAMETER;
+        }
+        char *matches[64];
+        int n = mos_fs_glob(rsrc, matches, 64);
+        if (n <= 0) {
+            mos_printf("COPY: no files matching '%s'\r\n", rsrc);
+            return FR_NO_FILE;
+        }
+        int rc = FR_OK;
+        for (int i = 0; i < n; i++) {
+            char *leaf = mos_getFilepathLeafname(matches[i]);
+            char newdst[MOS_PATH_MAX * 2];
+            snprintf(newdst, sizeof(newdst), "%s/%s", rdst, leaf);
+            mos_printf("Copying %s -> %s\r\n", matches[i], newdst);
+            if (mos_copyFile(matches[i], newdst) != 0) rc = FR_INT_ERR;
+        }
+        free(matches[0]);
+        return rc;
+    }
+
+    /* Single file — if dst is a directory, copy into it */
     if (mos_isDirectory(rdst)) {
         char *leaf = mos_getFilepathLeafname(rsrc);
         char newdst[MOS_PATH_MAX * 2];
@@ -1317,6 +1359,20 @@ static int cmd_TRY(char *ptr)
 /* -------------------------------------------------------------------------
  * CMD: TYPE
  * ------------------------------------------------------------------------- */
+static int type_one(const char *path)
+{
+    FILE *f = fopen(path, "r");
+    if (!f) {
+        mos_printf("TYPE: cannot open '%s': %s\r\n", path, strerror(errno));
+        return FR_NO_FILE;
+    }
+    char buf[128];
+    while (fgets(buf, sizeof(buf), f))
+        mos_puts(buf);
+    fclose(f);
+    return FR_OK;
+}
+
 static int cmd_TYPE(char *ptr)
 {
     char *filename;
@@ -1326,17 +1382,23 @@ static int cmd_TYPE(char *ptr)
     char resolved[MOS_PATH_MAX];
     mos_fs_resolve(filename, resolved, sizeof(resolved));
 
-    FILE *f = fopen(resolved, "r");
-    if (!f) {
-        mos_printf("TYPE: cannot open '%s': %s\r\n", resolved, strerror(errno));
-        return FR_NO_FILE;
+    if (strchr(resolved, '*') || strchr(resolved, '?')) {
+        char *matches[64];
+        int n = mos_fs_glob(resolved, matches, 64);
+        if (n <= 0) {
+            mos_printf("TYPE: no files matching '%s'\r\n", resolved);
+            return FR_NO_FILE;
+        }
+        int rc = FR_OK;
+        for (int i = 0; i < n; i++) {
+            mos_printf("==> %s <==\r\n", matches[i]);
+            if (type_one(matches[i]) != FR_OK) rc = FR_NO_FILE;
+        }
+        free(matches[0]);
+        return rc;
     }
-    char buf[128];
-    while (fgets(buf, sizeof(buf), f)) {
-        mos_puts(buf);
-    }
-    fclose(f);
-    return FR_OK;
+
+    return type_one(resolved);
 }
 
 /* -------------------------------------------------------------------------
