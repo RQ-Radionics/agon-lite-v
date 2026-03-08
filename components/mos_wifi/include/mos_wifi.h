@@ -1,5 +1,10 @@
 /*
  * mos_wifi.h - WiFi connection manager for ESP32-MOS
+ *
+ * wifi.cfg keys (all optional except ssid/password):
+ *   ssid=MyNetwork
+ *   password=MySecret
+ *   tz=CET-1CEST,M3.5.0,M10.5.0/3   (POSIX TZ string, default UTC0)
  */
 
 #ifndef MOS_WIFI_H
@@ -48,6 +53,12 @@ bool mos_wifi_is_connected(void);
 /** Returns the assigned IP address as a dotted-decimal string, or NULL. */
 const char *mos_wifi_ip(void);
 
+/**
+ * Returns the POSIX TZ string read from wifi.cfg (tz= line), or NULL if
+ * absent. Caller should pass this to mos_sntp_init(); defaults to UTC0.
+ */
+const char *mos_wifi_get_tz(void);
+
 #else /* !CONFIG_MOS_WIFI_ENABLED */
 
 /* Stubs for boards without WiFi — all callers work without #ifdef */
@@ -56,6 +67,7 @@ static inline int  mos_wifi_connect(const char *s, const char *p, uint32_t ms)  
 static inline int  mos_wifi_save_config(const char *s, const char *p)               { (void)s; (void)p; return -1; }
 static inline bool mos_wifi_is_connected(void)                                       { return false; }
 static inline const char *mos_wifi_ip(void)                                          { return NULL; }
+static inline const char *mos_wifi_get_tz(void)                                      { return NULL; }
 
 #endif /* CONFIG_MOS_WIFI_ENABLED */
 

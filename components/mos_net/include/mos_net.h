@@ -28,4 +28,11 @@ bool mos_net_is_connected(void);
 /** Returns the assigned IP as a dotted-decimal string, or NULL. */
 const char *mos_net_ip(void);
 
+/**
+ * Returns the POSIX TZ string configured for this network interface
+ * (e.g. from wifi.cfg tz= line), or NULL if not set (defaults to UTC0).
+ * Pass the result directly to mos_sntp_init().
+ */
+const char *mos_net_get_tz(void);
+
 #endif /* MOS_NET_H */

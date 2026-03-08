@@ -36,6 +36,11 @@ const char *mos_net_ip(void)
     return mos_wifi_ip();
 }
 
+const char *mos_net_get_tz(void)
+{
+    return mos_wifi_get_tz();
+}
+
 /* ================================================================== */
 /* Backend: Ethernet (RMII, IP101GRR)                                  */
 /* ================================================================== */
@@ -202,6 +207,11 @@ const char *mos_net_ip(void)
     return (s_ip[0] != '\0') ? s_ip : NULL;
 }
 
+const char *mos_net_get_tz(void)
+{
+    return NULL;   /* Ethernet backend: no TZ config */
+}
+
 /* ================================================================== */
 /* Backend: None                                                        */
 /* ================================================================== */
@@ -211,5 +221,6 @@ const char *mos_net_ip(void)
 int  mos_net_init(uint32_t max_wait_ms) { (void)max_wait_ms; return -1; }
 bool mos_net_is_connected(void)         { return false; }
 const char *mos_net_ip(void)            { return NULL; }
+const char *mos_net_get_tz(void)        { return NULL; }
 
 #endif

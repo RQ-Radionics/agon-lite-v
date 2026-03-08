@@ -4,6 +4,7 @@
  * Credentials are read at boot from /sdcard/wifi.cfg (simple key=value format):
  *   ssid=MyNetwork
  *   password=MySecret
+ *   tz=CET-1CEST,M3.5.0,M10.5.0/3   (optional — POSIX TZ string, default UTC0)
  *
  * If the file is absent or unreadable, falls back to wifi_credentials.h.
  * The 'wifi' shell command connects with new credentials and saves them.
@@ -41,6 +42,7 @@ static EventGroupHandle_t s_wifi_eg  = NULL;
 static bool               s_inited   = false;
 static int                s_retries  = 0;
 static char               s_ip[16]   = {0};
+static char               s_tz[64]   = {0};   /* POSIX TZ string from wifi.cfg */
 
 /* ------------------------------------------------------------------ */
 /* Internal: read wifi.cfg from SD                                      */
@@ -51,6 +53,7 @@ static void load_cfg(char *ssid, size_t ssid_sz, char *pass, size_t pass_sz)
     /* Start with compiled-in fallback */
     strncpy(ssid, WIFI_SSID,     ssid_sz - 1);  ssid[ssid_sz - 1] = '\0';
     strncpy(pass, WIFI_PASSWORD, pass_sz - 1);  pass[pass_sz - 1] = '\0';
+    s_tz[0] = '\0';
 
     FILE *f = fopen(WIFI_CFG_PATH, "r");
     if (!f) {
@@ -74,6 +77,10 @@ static void load_cfg(char *ssid, size_t ssid_sz, char *pass, size_t pass_sz)
             strncpy(pass, line + 9, pass_sz - 1);
             pass[pass_sz - 1] = '\0';
             got_pass = true;
+        } else if (strncmp(line, "tz=", 3) == 0) {
+            strncpy(s_tz, line + 3, sizeof(s_tz) - 1);
+            s_tz[sizeof(s_tz) - 1] = '\0';
+            ESP_LOGI(TAG, "Timezone from wifi.cfg: '%s'", s_tz);
         }
     }
     fclose(f);
@@ -267,6 +274,11 @@ bool mos_wifi_is_connected(void)
 const char *mos_wifi_ip(void)
 {
     return (s_ip[0] != '\0') ? s_ip : NULL;
+}
+
+const char *mos_wifi_get_tz(void)
+{
+    return (s_tz[0] != '\0') ? s_tz : NULL;
 }
 
 #endif /* CONFIG_MOS_WIFI_ENABLED */

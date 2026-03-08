@@ -485,7 +485,7 @@ static void mos_main_task(void *arg)
     /* 5. SNTP — only if we have a network */
 #if !defined(CONFIG_MOS_NET_NONE)
     if (net_ok == 0) {
-        if (mos_sntp_init(NULL, 10000) == 0) {
+        if (mos_sntp_init(mos_net_get_tz(), 10000) == 0) {
             mos_printf("Clock synced via NTP\r\n");
         } else {
             mos_printf("NTP sync timeout - clock not set\r\n");
