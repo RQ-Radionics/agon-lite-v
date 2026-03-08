@@ -1743,6 +1743,7 @@ static void mode_set(uint8_t mode)
         /*28 */ {640, 256, 16},
         /*29 */ {640, 256,  4},
         /*30 */ {640, 256,  2},
+        /*31 */ {1024,768, 64},  /* mode 31: 1024×768 64-colour (native FB resolution) */
     };
     /* bit 7 = double-buffer; base mode is bits[6:0] */
     int m = (int)(mode & 0x7F);
