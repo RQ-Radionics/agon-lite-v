@@ -41,7 +41,7 @@ void        mos_fs_setdrive(char drive);
  * of matching absolute paths.
  *
  * @param pattern   Path with optional wildcards in the filename part
- *                  (e.g. "/sdcard/*.bin" or "/sdcard/foo/test?.*").
+ *                  (e.g. "/sdcard/foo.bin" with glob chars * or ?).
  *                  Wildcards in directory components are not supported.
  * @param results   Caller-supplied array of char pointers to fill.
  *                  Each entry points into a single heap block — free only
