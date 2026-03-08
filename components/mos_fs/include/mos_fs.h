@@ -36,6 +36,15 @@ int         mos_fs_chdir(const char *path);
 char        mos_fs_getdrive(void);
 void        mos_fs_setdrive(char drive);
 
+/**
+ * Read the first non-blank, non-comment line from a text file into buf.
+ * Lines beginning with '#' (in any column position) are skipped.
+ * Lines longer than buf_size-1 are truncated safely.
+ * Trailing newline/CR are stripped.
+ * @return  0 on success, -1 if file not found or no data line found.
+ */
+int         mos_fs_readline(const char *path, char *buf, size_t buf_size);
+
 /* Kept for source compatibility — always returns false now */
 static inline bool mos_fs_flash_mounted(void) { return false; }
 

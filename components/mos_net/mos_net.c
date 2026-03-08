@@ -14,8 +14,6 @@
 #include "mos_net.h"
 #include "mos_fs.h"
 #include "esp_log.h"
-#include <stdio.h>
-#include <string.h>
 
 static const char *TAG = "mos_net";
 
@@ -29,22 +27,8 @@ static const char *load_tz(void)
 {
     if (s_tz_loaded) return s_tz;
     s_tz_loaded = true;
-    FILE *f = fopen(TZ_CFG_PATH, "r");
-    if (!f) return s_tz;   /* stays empty → caller uses UTC0 */
-    char line[64];
-    while (fgets(line, sizeof(line), f)) {
-        /* strip trailing newline/CR */
-        size_t len = strlen(line);
-        while (len > 0 && (line[len-1] == '\n' || line[len-1] == '\r'))
-            line[--len] = '\0';
-        /* skip blank lines and # comments */
-        if (len == 0 || line[0] == '#') continue;
-        strncpy(s_tz, line, sizeof(s_tz) - 1);
-        s_tz[sizeof(s_tz) - 1] = '\0';
+    if (mos_fs_readline(TZ_CFG_PATH, s_tz, sizeof(s_tz)) == 0)
         ESP_LOGI(TAG, "Timezone from tz.cfg: '%s'", s_tz);
-        break;
-    }
-    fclose(f);
     return s_tz;
 }
 

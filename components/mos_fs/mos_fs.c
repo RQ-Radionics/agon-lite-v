@@ -273,3 +273,50 @@ int mos_fs_chdir(const char *path)
     s_current_drive = MOS_DRIVE_SD;
     return 0;
 }
+
+/* ------------------------------------------------------------------ */
+/* Text file helpers                                                     */
+/* ------------------------------------------------------------------ */
+
+int mos_fs_readline(const char *path, char *buf, size_t buf_size)
+{
+    if (!path || !buf || buf_size == 0) return -1;
+    FILE *f = fopen(path, "r");
+    if (!f) return -1;
+
+    /* Temporary read buffer — large enough to swallow any comment line. */
+    char tmp[256];
+    bool skip_rest = false;   /* draining a line longer than tmp */
+    int  rc        = -1;
+
+    while (fgets(tmp, sizeof(tmp), f)) {
+        size_t len    = strlen(tmp);
+        bool   has_nl = (len > 0 &&
+                         (tmp[len-1] == '\n' || tmp[len-1] == '\r'));
+
+        /* strip trailing newline/CR */
+        while (len > 0 && (tmp[len-1] == '\n' || tmp[len-1] == '\r'))
+            tmp[--len] = '\0';
+
+        if (skip_rest) {
+            if (has_nl) skip_rest = false;
+            continue;
+        }
+
+        /* skip blank lines and comment lines (# anywhere as first non-space
+         * is too complex; we just check column 0 per the documented format) */
+        if (len == 0 || tmp[0] == '#') {
+            if (!has_nl) skip_rest = true;
+            continue;
+        }
+
+        /* found a data line — copy to caller's buffer (truncate if needed) */
+        strncpy(buf, tmp, buf_size - 1);
+        buf[buf_size - 1] = '\0';
+        rc = 0;
+        break;
+    }
+
+    fclose(f);
+    return rc;
+}
