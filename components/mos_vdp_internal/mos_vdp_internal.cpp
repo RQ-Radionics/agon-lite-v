@@ -2690,7 +2690,7 @@ static const uint8_t s_ps2_unshifted[128] = {
 /*48*/  0,    '.',  '/',  'l',  ';',  'p',  '-',  0,
 /*50*/  0,    0,    '\'', 0,    '[',  '=',  0,    0,
 /*58*/  0,    0,    '\r', ']',  0,    '\\', 0,    0,
-/*60*/  0,    0,    0,    0,    0,    0,    '\b', 0,
+/*60*/  0,    0,    0,    0,    0,    0,    0x7F, 0,
 /*68*/  0,    '1',  0,    '4',  '7',  0,    0,    0,
 /*70*/  '0',  '.',  '2',  '5',  '6',  '8',  27,   0,
 /*78*/  0,    '+',  '3',  '-',  '*',  '9',  0,    0,
@@ -2709,7 +2709,7 @@ static const uint8_t s_ps2_shifted[128] = {
 /*48*/  0,    '>',  '?',  'L',  ':',  'P',  '_',  0,
 /*50*/  0,    0,    '"',  0,    '{',  '+',  0,    0,
 /*58*/  0,    0,    '\r', '}',  0,    '|',  0,    0,
-/*60*/  0,    0,    0,    0,    0,    0,    '\b', 0,
+/*60*/  0,    0,    0,    0,    0,    0,    0x7F, 0,
 /*68*/  0,    '1',  0,    '4',  '7',  0,    0,    0,
 /*70*/  '0',  '.',  '2',  '5',  '6',  '8',  27,   0,
 /*78*/  0,    '+',  '3',  '-',  '*',  '9',  0,    0,
@@ -2764,16 +2764,19 @@ static void kbd_process_scancode(uint8_t byte)
         if (release) return;
         uint8_t ascii = 0;
         switch (byte) {
-        case 0x75: ascii = 0xC1; break; /* up arrow    */
-        case 0x72: ascii = 0xC2; break; /* down arrow  */
-        case 0x74: ascii = 0xC3; break; /* right arrow */
-        case 0x6B: ascii = 0xC4; break; /* left arrow  */
-        case 0x6C: ascii = 0x01; break; /* Home → ^A   */
-        case 0x69: ascii = 0x05; break; /* End  → ^E   */
-        case 0x7D: ascii = 0x19; break; /* PgUp */
-        case 0x7A: ascii = 0x18; break; /* PgDn */
-        case 0x70: ascii = 0x7F; break; /* Insert */
-        case 0x71: ascii = 0x08; break; /* Delete → BS */
+        case 0x75: ascii = 0x0B; break; /* Up arrow    — BBC BASIC */
+        case 0x72: ascii = 0x0A; break; /* Down arrow  — BBC BASIC */
+        case 0x74: ascii = 0x15; break; /* Right arrow — BBC BASIC */
+        case 0x6B: ascii = 0x08; break; /* Left arrow  — BBC BASIC */
+        case 0x71: ascii = 0x7F; break; /* Delete */
+        case 0x5A: ascii = '\r'; break; /* KP Enter */
+        case 0x4A: ascii = '/';  break; /* KP / */
+        /* Insert, Home, End, PgUp, PgDn: no ASCII in Agon protocol */
+        case 0x70:                       /* Insert   */
+        case 0x6C:                       /* Home     */
+        case 0x69:                       /* End      */
+        case 0x7D:                       /* Page Up  */
+        case 0x7A: return;               /* Page Dn  */
         default:   return;
         }
         xQueueSend(s_key_queue, &ascii, 0);
