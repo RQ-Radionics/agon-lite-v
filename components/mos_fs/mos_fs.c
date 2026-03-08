@@ -6,6 +6,9 @@
 
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <dirent.h>
+#include <fnmatch.h>
 #include "esp_log.h"
 #include "esp_vfs_fat.h"
 #include "sdmmc_cmd.h"
@@ -200,22 +203,40 @@ const char *mos_fs_getcwd(void) { return s_cwd; }
 /* ------------------------------------------------------------------ */
 
 /* Strip trailing "/." and trailing "/" (except root) from a resolved path */
+/* Collapse /./  and /../ segments in an absolute path in-place.
+ * Works on any absolute path (e.g. /sdcard/foo/../bar → /sdcard/bar).
+ * Does not climb above "/". */
 static void path_normalise(char *p)
 {
-    size_t len = strlen(p);
-    /* Remove trailing "/." */
-    while (len >= 2 && p[len-2] == '/' && p[len-1] == '.') {
-        p[len-2] = '\0';
-        len -= 2;
+    /* We process the path segment by segment into a small stack of
+     * pointers into a copy, then reassemble. */
+    char tmp[512];
+    strncpy(tmp, p, sizeof(tmp) - 1);
+    tmp[sizeof(tmp) - 1] = '\0';
+
+    /* Split on '/' — collect non-empty segments */
+    const char *segs[64];
+    int         nseg = 0;
+
+    char *tok = strtok(tmp, "/");
+    while (tok) {
+        if (strcmp(tok, ".") == 0) {
+            /* skip */
+        } else if (strcmp(tok, "..") == 0) {
+            if (nseg > 0) nseg--;   /* pop one level, never below root */
+        } else {
+            if (nseg < 64) segs[nseg++] = tok;
+        }
+        tok = strtok(NULL, "/");
     }
-    /* Remove trailing "/" unless it IS the root */
-    while (len > 1 && p[len-1] == '/') {
-        p[--len] = '\0';
+
+    /* Reassemble as absolute path */
+    p[0] = '\0';
+    for (int i = 0; i < nseg; i++) {
+        strcat(p, "/");
+        strcat(p, segs[i]);
     }
-    /* If we stripped everything, use mount root */
-    if (len == 0) {
-        strcpy(p, "/");
-    }
+    if (p[0] == '\0') strcpy(p, "/");
 }
 
 int mos_fs_resolve(const char *path, char *out_buf, size_t out_size)
@@ -272,6 +293,69 @@ int mos_fs_chdir(const char *path)
     /* Keep current_drive — only one drive exists */
     s_current_drive = MOS_DRIVE_SD;
     return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* Glob / wildcard expansion                                             */
+/* ------------------------------------------------------------------ */
+
+int mos_fs_glob(const char *pattern, char **results, int max)
+{
+    if (!pattern || !results || max <= 0) return -1;
+
+    /* Split pattern into directory and filename parts */
+    char dir_part[512];
+    strncpy(dir_part, pattern, sizeof(dir_part) - 1);
+    dir_part[sizeof(dir_part) - 1] = '\0';
+
+    char *last_slash = strrchr(dir_part, '/');
+    const char *name_pat;
+    if (last_slash) {
+        *last_slash = '\0';
+        name_pat    = last_slash + 1;
+    } else {
+        /* No slash — search cwd */
+        strncpy(dir_part, s_cwd, sizeof(dir_part) - 1);
+        name_pat = pattern;
+    }
+
+    DIR *d = opendir(dir_part);
+    if (!d) return -1;
+
+    /* Collect all matching names into one heap block */
+    /* First pass: count and measure total string storage needed */
+    size_t total_len = 0;
+    int    count     = 0;
+    struct dirent *ent;
+    while ((ent = readdir(d)) != NULL && count < max) {
+        if (fnmatch(name_pat, ent->d_name, FNM_PERIOD) == 0) {
+            total_len += strlen(dir_part) + 1 + strlen(ent->d_name) + 1;
+            count++;
+        }
+    }
+    closedir(d);
+
+    if (count == 0) return 0;
+
+    /* Allocate one block for all strings */
+    char *block = malloc(total_len);
+    if (!block) return -1;
+
+    /* Second pass: fill results[] with pointers into block */
+    d = opendir(dir_part);
+    if (!d) { free(block); return -1; }
+
+    char *ptr = block;
+    int   n   = 0;
+    while ((ent = readdir(d)) != NULL && n < count) {
+        if (fnmatch(name_pat, ent->d_name, FNM_PERIOD) == 0) {
+            results[n] = ptr;
+            ptr += sprintf(ptr, "%s/%s", dir_part, ent->d_name) + 1;
+            n++;
+        }
+    }
+    closedir(d);
+    return n;
 }
 
 /* ------------------------------------------------------------------ */

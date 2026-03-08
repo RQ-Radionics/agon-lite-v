@@ -37,6 +37,21 @@ char        mos_fs_getdrive(void);
 void        mos_fs_setdrive(char drive);
 
 /**
+ * Expand a path that may contain wildcard characters (* and ?) into a list
+ * of matching absolute paths.
+ *
+ * @param pattern   Path with optional wildcards in the filename part
+ *                  (e.g. "/sdcard/*.bin" or "/sdcard/foo/test?.*").
+ *                  Wildcards in directory components are not supported.
+ * @param results   Caller-supplied array of char pointers to fill.
+ *                  Each entry points into a single heap block — free only
+ *                  results[0] when done (if count > 0).
+ * @param max       Maximum number of entries in results[].
+ * @return          Number of matches found (0 if none, -1 on error).
+ */
+int mos_fs_glob(const char *pattern, char **results, int max);
+
+/**
  * Read the first non-blank, non-comment line from a text file into buf.
  * Lines beginning with '#' (in any column position) are skipped.
  * Lines longer than buf_size-1 are truncated safely.

@@ -649,7 +649,6 @@ static int cmd_DEL(char *ptr)
 {
     char   *filename;
     bool    force   = false;
-    bool    verbose = false;
     int     result;
 
     result = extractString(ptr, &ptr, NULL, &filename, EXTRACT_FLAG_AUTO_TERMINATE);
@@ -659,13 +658,43 @@ static int cmd_DEL(char *ptr)
     }
     if (result != FR_OK) return result;
 
-    /* Verbose if pattern has wildcards */
-    verbose = (mos_strcspn(filename, "*?:") != strlen(filename));
-    if (!force) force = !verbose;
+    bool has_wildcard = (mos_strcspn(filename, "*?") != strlen(filename));
 
     char resolved[MOS_PATH_MAX];
     mos_fs_resolve(filename, resolved, sizeof(resolved));
 
+    if (has_wildcard) {
+        /* Expand wildcards, confirm once, then delete each match */
+        char *matches[64];
+        int   n = mos_fs_glob(resolved, matches, 64);
+        if (n <= 0) {
+            mos_printf("DEL: no files matching '%s'\r\n", resolved);
+            return FR_NO_FILE;
+        }
+        if (!force) {
+            char verify[8];
+            mos_printf("Delete %d file(s) matching %s? (Yes/No) ", n, resolved);
+            mos_editor_readline("", verify, sizeof(verify));
+            mos_printf("\r\n");
+            if (strcasecmp(verify, "Yes") != 0 && strcasecmp(verify, "Y") != 0) {
+                free(matches[0]);
+                mos_printf("Cancelled.\r\n");
+                return FR_OK;
+            }
+        }
+        int rc = FR_OK;
+        for (int i = 0; i < n; i++) {
+            mos_printf("Deleting %s\r\n", matches[i]);
+            if (remove(matches[i]) != 0) {
+                mos_printf("DEL: cannot delete '%s': %s\r\n", matches[i], strerror(errno));
+                rc = FR_NO_FILE;
+            }
+        }
+        free(matches[0]);
+        return rc;
+    }
+
+    /* Single file — confirm if not forced */
     if (!force) {
         char verify[8];
         mos_printf("Delete %s? (Yes/No) ", resolved);
@@ -675,9 +704,6 @@ static int cmd_DEL(char *ptr)
             mos_printf("Cancelled.\r\n");
             return FR_OK;
         }
-    }
-    if (verbose) {
-        mos_printf("Deleting %s\r\n", resolved);
     }
 
     if (remove(resolved) != 0) {
