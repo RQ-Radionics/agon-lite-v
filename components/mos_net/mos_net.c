@@ -31,12 +31,18 @@ static const char *load_tz(void)
     s_tz_loaded = true;
     FILE *f = fopen(TZ_CFG_PATH, "r");
     if (!f) return s_tz;   /* stays empty → caller uses UTC0 */
-    if (fgets(s_tz, sizeof(s_tz), f)) {
+    char line[64];
+    while (fgets(line, sizeof(line), f)) {
         /* strip trailing newline/CR */
-        size_t len = strlen(s_tz);
-        while (len > 0 && (s_tz[len-1] == '\n' || s_tz[len-1] == '\r'))
-            s_tz[--len] = '\0';
+        size_t len = strlen(line);
+        while (len > 0 && (line[len-1] == '\n' || line[len-1] == '\r'))
+            line[--len] = '\0';
+        /* skip blank lines and # comments */
+        if (len == 0 || line[0] == '#') continue;
+        strncpy(s_tz, line, sizeof(s_tz) - 1);
+        s_tz[sizeof(s_tz) - 1] = '\0';
         ESP_LOGI(TAG, "Timezone from tz.cfg: '%s'", s_tz);
+        break;
     }
     fclose(f);
     return s_tz;
