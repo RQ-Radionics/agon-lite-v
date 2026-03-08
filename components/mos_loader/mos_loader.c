@@ -237,12 +237,16 @@ int mos_loader_exec(const char *path, int argc, char **argv)
      * This avoids the crash where free(tcb) races with prvCheckTasksWaitingTermination
      * in the idle task still dereferencing the TCB after vTaskDelete(NULL). */
     TaskHandle_t task = NULL;
-    BaseType_t created = xTaskCreateWithCaps(
+    /* Pin user programs to core 1 so USB/VDP tasks on core 0 are never
+     * starved of CPU — otherwise keystrokes (including ESC) are never
+     * enqueued because usb_client_task can't run while BASIC is busy. */
+    BaseType_t created = xTaskCreatePinnedToCoreWithCaps(
         user_task, "user_prog",
         USER_TASK_STACK_SIZE / sizeof(StackType_t),
         &args,
         tskIDLE_PRIORITY + 5,
         &task,
+        1,  /* core 1 */
         USER_TASK_STACK_CAPS);
     if (created != pdPASS || !task) {
         ESP_LOGE(TAG, "xTaskCreateWithCaps failed (%u KB %s stack)", USER_TASK_STACK_KB,
